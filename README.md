@@ -12,9 +12,35 @@ ou nuvem BYOK).
 
 ## Status
 
-**Escopo aprovado (08/07/2026), pré-código.** Próximo passo: **C0** — spike do
-gateway (provar pergunta → `tool_call` → resultado → resposta via
-`POST /api/v1/code/chat`; o tool-calling nos drivers já existe no SHVIA-WEB).
+**C1–C3 no código (0.3.x)** — o `anna` lê, edita (diff+confirmação), roda `bash`
+(com gates), commita, retoma **sessões**, troca de modelo (`/model`) e responde
+em markdown. `cargo clippy -D warnings` limpo, 10 testes verdes. **Falta só o
+smoke ao vivo** (precisa de `SHVIA_API_KEY` + gateway 2.16.0) pra provar o loop
+de ponta a ponta contra um modelo real.
+
+## Instalar
+
+```bash
+git clone git@github.com:samirhvbr/SHVIA-CODE.git && cd SHVIA-CODE
+./install.sh                    # preflight + build release + copia p/ ~/.local/bin
+export SHVIA_API_KEY=<sua-chave-do-ShvIA>
+```
+
+Precisa de Rust (`rustup`) — o `install.sh` avisa se faltar algo. A chave vem de
+`SHVIA_API_KEY` ou `~/.config/shvia-code/config.toml` (0600) — **nunca** por
+argumento de CLI. `anna config` mostra o estado resolvido.
+
+## Usar
+
+```bash
+cd ~/meu-projeto
+anna                            # REPL: pergunte, edite, rode, commite (com aprovação)
+anna -p "onde está o bug no cálculo de boleto?"   # uma pergunta, não-interativo
+anna --model "modelo@servidor"  # perfil específico  ·  /model troca no meio
+anna sessions list|resume <id>|clear              # retomar de onde parou
+```
+
+Comandos do REPL: `/help` · `/model [perfil]` · `/sessions` · `/tools` · `/clear` · `/exit`.
 
 ## Desenho em uma linha
 
@@ -24,6 +50,6 @@ herdados do servidor.
 
 ## Fases
 
-C0 spike do gateway → C1 MVP leitura → C2 mãos (edit/bash/git com aprovação) →
-C3 ergonomia (sessões, ANNA.md, custo/turno) → C4 distribuição (build-local +
-binários + dogfood) → C5 skills/RAG/CI/SShvTerm.
+C0 spike do gateway → **C1 leitura ✓** → **C2 mãos (edit/bash/git) ✓** → **C3
+ergonomia (sessões, `/model`, markdown) ✓** → **C4 distribuição (`install.sh` +
+dogfood) ▸ em curso** → C5 skills/RAG/CI/SShvTerm.

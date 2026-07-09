@@ -58,6 +58,19 @@
   - Gate `Confirm`/`Always` agora vivos; modo `-p` nega escrita por padrão (seguro).
   - ✅ clippy `-D warnings` limpo · **9 testes** verdes (inclui o caminho de
     escrita real via gate aprovado, e a classificação de comandos) · binário release.
-- **Próximo: C3 (ergonomia)** — sessões resume (`~/.shvia-code/sessions/`),
-  `/model` pra trocar perfil, ANNA.md, render de markdown, e (opcional) TUI ratatui.
-  Ou C4 (distribuição/dogfood) quando o smoke ao vivo do C1/C2 confirmar o loop.
+- **09/07/2026 — C3 CODADO (0.3.0): ergonomia do terminal.**
+  - **Sessões locais** (`~/.shvia-code/sessions/<id>.json`, 0600): autosave a cada
+    volta (título = 1ª pergunta); `anna sessions list|resume <id>|clear` + `/sessions`
+    no REPL. Round-trip validado (cria→list→clear).
+  - **`/model [perfil]`** troca o modelo no meio da conversa (+ flag `--model` no
+    start); `/tools` lista as ferramentas; `/help`/`/clear` atualizados.
+  - **Markdown na resposta** (`render.rs`): headings, listas, negrito/itálico/código
+    inline + blocos ``` — estilizado **por linha** (não quebra o streaming).
+  - `Message` ganhou `Deserialize` (persistência de sessão).
+  - ✅ clippy `-D warnings` limpo · **10 testes** verdes (novo: render markdown) ·
+    smoke offline ok (`config`, `sessions`, `--help`, round-trip).
+- **Próximo: C4 (distribuição/dogfood)** — usar o `anna` pra desenvolver o próprio
+  `anna`; empacotar (build-local já gera binário+checksum); ANNA.md do repo. Trava
+  só no **smoke ao vivo** (API key + 2.16.0) — o resto do CLI está completo p/ leitura,
+  escrita, exec, git, sessões e markdown. Alternativa: **C5** (motor na aba Agente do
+  SShvTerm).

@@ -6,13 +6,14 @@ use serde::{Deserialize, Serialize};
 /// Uma mensagem do histórico. `content` sempre presente (mesmo vazio p/ um
 /// assistant que só chamou tools). `tool_call_id` só em `role="tool"`;
 /// `tool_calls` só em `role="assistant"`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
+    #[serde(default)]
     pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
 }
 

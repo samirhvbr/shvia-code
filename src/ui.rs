@@ -1,9 +1,9 @@
-//! Render no terminal: streaming da resposta, linhas de ferramenta, rodapé de
-//! custo. C1 = REPL linha-a-linha (o input mora no main via rustyline); aqui é
-//! só a saída. TUI (ratatui) é C3. Cores por ANSI simples (sem dep extra no C1).
+//! Render no terminal: streaming da resposta (com markdown leve por linha),
+//! linhas de ferramenta, rodapé de custo. O input mora no `main` (rustyline);
+//! aqui é só a saída. Cores por ANSI simples. Markdown: `render`. TUI = evolução.
 
+use crate::render;
 use crate::types::{Event, ToolCall};
-use std::io::{self, Write};
 
 const CYAN: &str = "\x1b[1;36m";
 const GREEN: &str = "\x1b[92m";
@@ -14,8 +14,9 @@ const RESET: &str = "\x1b[0m";
 
 #[derive(Default)]
 pub struct Ui {
-    streamed: bool,
     label_shown: bool,
+    line_buf: String,
+    in_code: bool,
 }
 
 impl Ui {
@@ -31,34 +32,56 @@ impl Ui {
         println!("{GRAY}{text}{RESET}");
     }
 
-    /// Renderiza um evento ao vivo (chamado pelo api::code_chat).
+    /// Renderiza um evento ao vivo (chamado pelo api::code_chat). O texto é
+    /// acumulado e liberado **por linha** — assim o markdown é estilizado quando
+    /// a linha fica completa, sem quebrar o streaming.
     pub fn on_event(&mut self, ev: &Event) {
         match ev {
             Event::TextDelta(d) => {
-                if !self.label_shown {
-                    print!("{GREEN}ANNA{RESET}  ");
-                    self.label_shown = true;
+                for ch in d.chars() {
+                    if ch == '\n' {
+                        let line = std::mem::take(&mut self.line_buf);
+                        self.print_line(&line);
+                    } else {
+                        self.line_buf.push(ch);
+                    }
                 }
-                print!("{d}");
-                self.streamed = true;
-                let _ = io::stdout().flush();
             }
             Event::ToolCall(c) => {
-                println!("\n{GRAY}  ⚙ {}({}){RESET}", c.name, compact_args(c));
+                self.flush_pending();
+                println!("{GRAY}  ⚙ {}({}){RESET}", c.name, compact_args(c));
             }
-            // Raciocínio oculto no C1.
+            // Raciocínio, model, usage, etc. não renderizam aqui.
             Event::ReasoningDelta | Event::Model { .. } | Event::Usage(_) | Event::Error(_)
             | Event::Done { .. } | Event::Other => {}
         }
     }
 
-    /// Fecha o bloco de texto da volta (quebra de linha se streamou algo).
-    pub fn end_stream(&mut self) {
-        if self.streamed {
-            println!();
+    fn flush_pending(&mut self) {
+        if !self.line_buf.is_empty() {
+            let line = std::mem::take(&mut self.line_buf);
+            self.print_line(&line);
         }
-        self.streamed = false;
+    }
+
+    fn print_line(&mut self, line: &str) {
+        if !self.label_shown {
+            println!("{GREEN}ANNA{RESET}");
+            self.label_shown = true;
+        }
+        if line.trim_start().starts_with("```") {
+            self.in_code = !self.in_code;
+            println!("{GRAY}  ┄┄┄{RESET}");
+            return;
+        }
+        println!("{}", render::style_line(line, self.in_code));
+    }
+
+    /// Fecha o bloco de texto da volta (libera a última linha pendente).
+    pub fn end_stream(&mut self) {
+        self.flush_pending();
         self.label_shown = false;
+        self.in_code = false;
     }
 
     /// Resultado de uma ferramenta executada localmente.

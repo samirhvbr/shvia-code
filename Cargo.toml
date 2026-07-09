@@ -1,0 +1,19 @@
+[package]
+name = "anna"
+# Mantida em sincronia com version.md (fonte da verdade). O build-local.sh checa.
+version = "0.0.4"
+edition = "2021"
+description = "Anna — CLI agêntico de código da Blue3, sobre o gateway do ShvIA (SHVIA-CODE)"
+authors = ["Samir Hanna Verza <samirhv@me.com>"]
+license = "UNLICENSED"
+
+[[bin]]
+name = "anna"
+path = "src/main.rs"
+
+# Esqueleto do C1: deps mínimas (args + erros). O conjunto completo (tokio,
+# reqwest+rustls, serde, ratatui, ignore, similar…) está em docs/arquitetura-cli.md
+# §3 e entra conforme cada módulo do C1–C3 é implementado.
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

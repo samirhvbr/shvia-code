@@ -40,12 +40,25 @@ pub async fn code_chat(
 
     let status = resp.status();
     if !status.is_success() {
-        // Erro pré-stream (4xx/5xx): corpo {detail} ou texto cru.
+        // Erro pré-stream (4xx/5xx): mensagem amigável nos casos comuns, senão
+        // o corpo {detail}/{message} ou o código cru.
         let txt = resp.text().await.unwrap_or_default();
-        let detail = serde_json::from_str::<serde_json::Value>(&txt)
-            .ok()
-            .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
-            .unwrap_or_else(|| format!("HTTP {status}"));
+        let body = serde_json::from_str::<serde_json::Value>(&txt).ok();
+        let body_detail = body.as_ref().and_then(|v| {
+            v.get("detail").or_else(|| v.get("message")).and_then(|d| d.as_str()).map(String::from)
+        });
+        let detail = match status.as_u16() {
+            401 => "não autorizado (401): chave ausente, inválida ou expirada. \
+                    Gere em ia.blue3.com.br → Conta → \"Gerar Chave de API\" e exporte \
+                    SHVIA_API_KEY (formato shvia_usr_…) — a APP_KEY base64: NÃO serve."
+                .to_string(),
+            403 => format!(
+                "proibido (403): {}",
+                body_detail.unwrap_or_else(|| "sua conta não tem permissão de API (can_use_api) — fale com um admin.".into())
+            ),
+            429 => "limite atingido (429): 20 requisições/min por chave — espere um instante.".to_string(),
+            _ => body_detail.unwrap_or_else(|| format!("HTTP {status}")),
+        };
         return Ok(TurnResult { error: Some(detail), ..Default::default() });
     }
 

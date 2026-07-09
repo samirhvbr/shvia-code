@@ -72,6 +72,13 @@ pub fn defs() -> Vec<ToolDef> {
     ]
 }
 
+/// Ferramentas do modo host (`--tools host`): só o shell. O `anna` PROPÕE um
+/// comando e a casca externa (ex.: SShvTerm) executa no host dela, com a
+/// política/PTY/auditoria própria — mapeia 1:1 no `propose_command` do SShvTerm.
+pub fn defs_host() -> Vec<ToolDef> {
+    defs().into_iter().filter(|d| d.name == "bash").collect()
+}
+
 /// Executa um tool call localmente e devolve o `content` da mensagem role=tool.
 /// O `fe` (frontend) decide as aprovações e renderiza os previews.
 pub fn run(call: &ToolCall, root: &Path, fe: &mut dyn Frontend) -> String {
@@ -418,6 +425,14 @@ mod tests {
         let root = sandbox();
         assert!(grep(&root, "bug", "", "*.rs").contains("src/main.rs:1"));
         assert!(glob_files(&root, "src/**/*.rs").contains("src/main.rs"));
+    }
+
+    #[test]
+    fn host_oferece_so_bash() {
+        let d = defs_host();
+        assert_eq!(d.len(), 1, "modo host deve oferecer 1 ferramenta");
+        assert_eq!(d[0].name, "bash");
+        assert!(defs().len() > 1, "modo local oferece o conjunto todo");
     }
 
     #[test]

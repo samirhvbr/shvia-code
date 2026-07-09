@@ -8,12 +8,14 @@
 
 use crate::frontend::Frontend;
 use crate::tools;
-use crate::types::ToolCall;
+use crate::types::{ToolCall, ToolDef};
 use std::path::Path;
 
 pub trait ToolRunner {
     /// Devolve o `content` do `role=tool` pra próxima volta do loop.
     fn run(&mut self, call: &ToolCall, root: &Path, fe: &mut dyn Frontend) -> String;
+    /// Ferramentas oferecidas ao modelo neste modo (local = todas; host = só bash).
+    fn tool_defs(&self) -> Vec<ToolDef>;
 }
 
 pub struct LocalRunner;
@@ -23,6 +25,10 @@ impl ToolRunner for LocalRunner {
         let out = tools::run(call, root, fe);
         fe.tool_result(call, &out);
         out
+    }
+
+    fn tool_defs(&self) -> Vec<ToolDef> {
+        tools::defs()
     }
 }
 
@@ -51,5 +57,9 @@ impl ToolRunner for HostRunner {
             }
             return v.get("content").and_then(|x| x.as_str()).unwrap_or_default().to_string();
         }
+    }
+
+    fn tool_defs(&self) -> Vec<ToolDef> {
+        tools::defs_host()
     }
 }

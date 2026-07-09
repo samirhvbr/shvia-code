@@ -139,7 +139,10 @@ fn main() -> anyhow::Result<()> {
     let mut telemetry = Telemetry::default();
 
     // Quem executa as tools: local (o anna) ou host (só com --json; ADR-002 B).
-    let mut runner: Box<dyn runner::ToolRunner> = if cli.json && matches!(cli.tools, ToolsMode::Host) {
+    // No modo host o anna só PROPÕE — oferece só `bash` e usa um system prompt
+    // próprio (a casca externa executa/aprova).
+    let host_mode = cli.json && matches!(cli.tools, ToolsMode::Host);
+    let mut runner: Box<dyn runner::ToolRunner> = if host_mode {
         Box::new(runner::HostRunner)
     } else {
         Box::new(runner::LocalRunner)
@@ -148,7 +151,7 @@ fn main() -> anyhow::Result<()> {
     // Motor headless (NDJSON) — pra embutir noutra casca (docs/embedding.md).
     if cli.json {
         let mut fe = json::JsonSink::new();
-        let mut messages = vec![Message::system(project.system_prompt())];
+        let mut messages = vec![Message::system(project.system_prompt(host_mode))];
         if let Some(prompt) = cli.prompt {
             run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), prompt);
         } else {
@@ -178,7 +181,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let mut ui = Ui::new(non_interactive);
-    let mut messages = vec![Message::system(project.system_prompt())];
+    let mut messages = vec![Message::system(project.system_prompt(host_mode))];
 
     // Modo não-interativo: uma pergunta e sai.
     if let Some(prompt) = cli.prompt {
@@ -233,7 +236,7 @@ fn main() -> anyhow::Result<()> {
                     continue;
                 }
                 if line == "/clear" {
-                    messages = vec![Message::system(project.system_prompt())];
+                    messages = vec![Message::system(project.system_prompt(host_mode))];
                     telemetry = Telemetry::default();
                     sess = Session::new();
                     ui.note("(contexto e sessão reiniciados)");

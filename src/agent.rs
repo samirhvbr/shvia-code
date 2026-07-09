@@ -10,7 +10,6 @@ use crate::frontend::Frontend;
 use crate::project::Project;
 use crate::runner::ToolRunner;
 use crate::telemetry::Telemetry;
-use crate::tools;
 use crate::types::Message;
 use anyhow::Result;
 
@@ -26,7 +25,7 @@ pub async fn run_turn(
 ) -> Result<()> {
     for _round in 0..MAX_ROUNDS {
         let result =
-            api::code_chat(cfg, messages, tools::defs(), &mut |ev| fe.on_event(ev)).await?;
+            api::code_chat(cfg, messages, runner.tool_defs(), &mut |ev| fe.on_event(ev)).await?;
         fe.end_stream();
 
         if let Some(u) = &result.usage {

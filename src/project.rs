@@ -27,8 +27,17 @@ impl Project {
         Self { root, name, git_branch, context }
     }
 
-    pub fn system_prompt(&self) -> String {
-        let mut s = String::from(
+    pub fn system_prompt(&self, host_mode: bool) -> String {
+        let base = if host_mode {
+            // Modo host (aba Agente do SShvTerm): a Anna PROPÕE comandos de shell;
+            // quem executa/aprova é o host. Só a ferramenta `bash` é oferecida.
+            "Você é a Anna, agente de código da Blue3, operando pela aba Agente do SShvTerm. \
+             Você PROPÕE comandos de shell (ferramenta `bash`) que o usuário roda no host dele \
+             (terminal visível ou SSH) — UM comando por vez, sempre explicando o porquê em uma \
+             frase. Você NUNCA executa: quem aprova e roda é o usuário, com a política dele. \
+             Prefira comandos de leitura (ls, cat, grep, git status/diff) antes de propor qualquer \
+             mudança. Responda em pt-BR, direto ao ponto."
+        } else {
             "Você é a Anna, agente de código da Blue3, operando no terminal do dev via SHVIA-CODE.\n\n\
              Ferramentas: leitura (read_file, list_dir, grep, glob), escrita (edit_file, write_file), \
              execução (bash) e git (git_status, git_diff, git_commit). SEMPRE inspecione o projeto com \
@@ -38,8 +47,9 @@ impl Project {
              diff e confirma). Rode testes/checagens com bash quando fizer sentido. Só commite \
              (git_commit) se o dev pedir. Toda escrita/execução passa por aprovação — proponha, não \
              force; se algo for recusado, siga sem insistir.\n\n\
-             Responda em pt-BR, direto ao ponto, citando arquivo:linha quando útil.",
-        );
+             Responda em pt-BR, direto ao ponto, citando arquivo:linha quando útil."
+        };
+        let mut s = String::from(base);
         s.push_str(&format!("\n\nProjeto: {} (raiz: {}).", self.name, self.root.display()));
         if let Some(ctx) = &self.context {
             let trimmed: String = ctx.chars().take(6000).collect();

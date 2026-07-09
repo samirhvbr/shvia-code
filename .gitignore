@@ -1,0 +1,19 @@
+# ── SO ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Rust ────────────────────────────────────────────────────────────
+target/
+**/target/
+**/*.rs.bk
+*.pdb
+
+# ── Ambiente / segredos (NUNCA versionar) ───────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.p8

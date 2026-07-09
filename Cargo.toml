@@ -1,7 +1,7 @@
 [package]
 name = "anna"
 # Mantida em sincronia com version.md (fonte da verdade). O build-local.sh checa.
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Anna — CLI agêntico de código da Blue3, sobre o gateway do ShvIA (SHVIA-CODE)"
 authors = ["Samir Hanna Verza <samirhv@me.com>"]
@@ -27,3 +27,4 @@ regex = "1"             # grep
 globset = "0.4"         # glob
 directories = "5"       # ~/.config, ~/.local/share corretos por SO
 toml = "0.8"            # config file
+similar = "2"           # diff unificado (preview de edit_file/write_file — C2)

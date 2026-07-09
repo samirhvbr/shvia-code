@@ -47,5 +47,17 @@
     > explique este projeto / onde está o bug em X?
     ```
     (o `spikes/c0-gateway.php` já provou o protocolo; isto prova o CLI Rust.)
-- **Próximo: C2** — `tools/edit,write,shell,git` + gates Confirm/Always + diff
-  (`similar`). A base (gate, guard, loop, registry) já acomoda sem refactor.
+- **09/07/2026 — C2 CODADO (0.2.0): as mãos que escrevem.**
+  - `edit_file` (substituição exata, exige old_string único) e `write_file`
+    (cria/sobrescreve) — ambos mostram **diff colorido** (`similar`) e pedem
+    **confirmação** (`[s]im/[n]ão/[t]udo`); denylist de segredos vale na escrita.
+  - `bash` — classifica: **allowlist** (ls/cat/cargo test/…) roda direto;
+    **destrutivo** (rm -rf, git push, curl|sh, drop table…) confirma SEMPRE;
+    resto confirma. Metacaractere (`>`,`|`,`;`,`&&`,`$(`) derruba do allowlist.
+  - `git_status`/`git_diff` (Auto) + `git_commit` (mostra diff staged, confirma).
+  - Gate `Confirm`/`Always` agora vivos; modo `-p` nega escrita por padrão (seguro).
+  - ✅ clippy `-D warnings` limpo · **9 testes** verdes (inclui o caminho de
+    escrita real via gate aprovado, e a classificação de comandos) · binário release.
+- **Próximo: C3 (ergonomia)** — sessões resume (`~/.shvia-code/sessions/`),
+  `/model` pra trocar perfil, ANNA.md, render de markdown, e (opcional) TUI ratatui.
+  Ou C4 (distribuição/dogfood) quando o smoke ao vivo do C1/C2 confirmar o loop.

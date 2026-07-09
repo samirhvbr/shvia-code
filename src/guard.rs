@@ -15,6 +15,19 @@ pub fn resolve(root: &Path, rel: &str) -> Option<PathBuf> {
     full.starts_with(&root_c).then_some(full)
 }
 
+/// Como `resolve`, mas para um arquivo que PODE não existir ainda (write_file):
+/// exige que o **diretório-pai** exista e esteja dentro da raiz. `None` = pai
+/// inexistente ou fora do projeto.
+pub fn resolve_new(root: &Path, rel: &str) -> Option<PathBuf> {
+    let rel = rel.trim().trim_start_matches('/');
+    let joined = root.join(rel);
+    let name = joined.file_name()?;
+    let parent = joined.parent()?;
+    let parent_c = parent.canonicalize().ok()?;
+    let root_c = root.canonicalize().ok()?;
+    parent_c.starts_with(&root_c).then(|| parent_c.join(name))
+}
+
 /// Caminho na denylist de segredos? Vale mesmo com override — o override é
 /// decisão do dev na hora (SECURITY §2.3), nunca do modelo.
 pub fn denied(rel: &str) -> bool {

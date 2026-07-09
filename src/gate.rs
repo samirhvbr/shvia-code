@@ -7,8 +7,6 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Confirm/Always são usados no C2 (edit/write/bash); o C1 só usa Auto.
-#[allow(dead_code)]
 pub enum Policy {
     /// Read-only, sem efeito colateral → roda sem perguntar.
     Auto,
@@ -29,6 +27,17 @@ pub struct Gate {
 impl Gate {
     pub fn new(non_interactive: bool) -> Self {
         Self { allowed: HashSet::new(), non_interactive }
+    }
+
+    /// Só para testes: pré-libera escopos (usa o mesmo caminho do "tudo nesta
+    /// sessão", não um bypass — Always continua pedindo).
+    #[cfg(test)]
+    pub fn allowing(scopes: &[&str]) -> Self {
+        let mut g = Self::default();
+        for s in scopes {
+            g.allowed.insert((*s).to_string());
+        }
+        g
     }
 
     /// Decide se a ação pode rodar. `scope` = tool + alvo (p/ o "tudo": ex.

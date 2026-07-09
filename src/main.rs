@@ -8,6 +8,7 @@
 mod agent;
 mod api;
 mod config;
+mod diff;
 mod gate;
 mod guard;
 mod project;

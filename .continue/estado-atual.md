@@ -30,6 +30,22 @@
   - **Esqueleto Rust que compila**: `Cargo.toml` + `src/main.rs` (`anna` /
     `anna config`, versão do `version.md`), `build-local.sh` (preflight + timing
     + checksum, padrão 0.5.8). `cargo check` verde.
-- **Sequência do C1** (arquitetura §7): api(sse) → agent(loop) → tools(fs+guard,
-  read-only) → gate(read) → ui(repl) → telemetry. Fecha quando `anna` conversa e
-  explica um repo real. Depende do transcript do C0 pra escolher o modelo.
+- **08/07/2026 — C1 CODADO (0.1.0): o `anna` de verdade compila, roda e é testado.**
+  Módulos: `main`(REPL + `-p`) · `config`(env/toml, chave nunca em arg) · `types`
+  (protocolo) · `api`(POST + parser SSE) · `agent`(o loop) · `tools`(read_file/
+  list_dir/grep/glob, respeita .gitignore) · `guard`(denylist+confinamento) ·
+  `gate`(Auto no C1; Confirm/Always prontos p/ C2) · `project`(raiz git + ANNA.md
+  + system prompt) · `ui`(streaming/tool lines/rodapé) · `telemetry`(custo/turno).
+  - ✅ `cargo clippy -D warnings` limpo · **5 testes** (denylist, confinamento,
+    parse SSE, read/grep/glob) verdes · `anna config` roda · `-p` sem chave =
+    erro amigável.
+  - ⏳ **Falta o smoke ao vivo** (precisa da API key + deploy do 2.16.0):
+    ```bash
+    ./build-local.sh                      # gera target/release/anna
+    cd ~/x/QUALQUER-REPO
+    SHVIA_API_KEY=<chave> ~/x/SHVIA-CODE/target/release/anna
+    > explique este projeto / onde está o bug em X?
+    ```
+    (o `spikes/c0-gateway.php` já provou o protocolo; isto prova o CLI Rust.)
+- **Próximo: C2** — `tools/edit,write,shell,git` + gates Confirm/Always + diff
+  (`similar`). A base (gate, guard, loop, registry) já acomoda sem refactor.

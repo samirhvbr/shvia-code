@@ -15,6 +15,7 @@ struct FileConfig {
     url: Option<String>,
     profile: Option<String>,
     api_key: Option<String>,
+    effort: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,8 @@ pub struct Config {
     pub url: String,
     pub profile: Option<String>,
     pub api_key: Option<String>,
+    /// Esforço de raciocínio (low|medium|high|xhigh|max). O gateway valida.
+    pub effort: Option<String>,
 }
 
 impl Config {
@@ -48,6 +51,7 @@ impl Config {
             .unwrap_or_else(|| DEFAULT_URL.to_string());
 
         let profile = std::env::var("SHVIA_PROFILE").ok().or(file.profile);
+        let effort = std::env::var("SHVIA_EFFORT").ok().filter(|e| !e.is_empty()).or(file.effort);
 
         // Chave: env tem precedência; senão o arquivo (0600). Nunca de arg.
         let api_key = std::env::var("SHVIA_API_KEY")
@@ -55,6 +59,6 @@ impl Config {
             .filter(|k| !k.is_empty())
             .or(file.api_key);
 
-        Ok(Self { url, profile, api_key })
+        Ok(Self { url, profile, api_key, effort })
     }
 }

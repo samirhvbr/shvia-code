@@ -21,5 +21,7 @@ pub trait Frontend {
     fn error(&mut self, msg: &str);
     fn warn(&mut self, msg: &str);
     /// Mostra o `preview` e decide se a ação roda (o gate). `Auto` nunca pergunta.
-    fn approve(&mut self, policy: Policy, scope: &str, preview: &Preview) -> bool;
+    /// `id` = o `tool_call.id` (correlaciona a proposta com a decisão e o resultado
+    /// no host — mesmo id no `gate_request` e no `tool_result`).
+    fn approve(&mut self, policy: Policy, scope: &str, id: &str, preview: &Preview) -> bool;
 }

@@ -63,6 +63,8 @@ pub struct ChatRequest<'a> {
     pub tools: Vec<ToolDef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 /// Uso/telemetria do evento `usage`.

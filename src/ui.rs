@@ -136,7 +136,7 @@ impl Frontend for Ui {
         println!("{YELLOW}{msg}{RESET}");
     }
 
-    fn approve(&mut self, policy: Policy, scope: &str, preview: &Preview) -> bool {
+    fn approve(&mut self, policy: Policy, scope: &str, _id: &str, preview: &Preview) -> bool {
         match policy {
             Policy::Auto => true,
             Policy::Confirm if self.allowed.contains(scope) => true,

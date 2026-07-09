@@ -29,7 +29,12 @@ pub async fn code_chat(
         .clone()
         .ok_or_else(|| anyhow!("sem API key — exporte SHVIA_API_KEY (ou configure ~/.config/shvia-code/config.toml)"))?;
 
-    let body = ChatRequest { messages, tools, profile_name: cfg.profile.clone() };
+    let body = ChatRequest {
+        messages,
+        tools,
+        profile_name: cfg.profile.clone(),
+        effort: cfg.effort.clone(),
+    };
     let resp = reqwest::Client::new()
         .post(format!("{}/api/v1/code/chat", cfg.url.trim_end_matches('/')))
         .header("Accept", "text/event-stream")
@@ -107,6 +112,16 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use crate::types::{Event, RawEvent};
+
+    #[test]
+    fn chat_request_serializa_effort() {
+        use crate::types::{ChatRequest, Message};
+        let msgs = vec![Message::user("oi")];
+        let com = ChatRequest { messages: &msgs, tools: vec![], profile_name: None, effort: Some("high".into()) };
+        assert!(serde_json::to_string(&com).unwrap().contains("\"effort\":\"high\""));
+        let sem = ChatRequest { messages: &msgs, tools: vec![], profile_name: None, effort: None };
+        assert!(!serde_json::to_string(&sem).unwrap().contains("effort"));
+    }
 
     #[test]
     fn parse_eventos_do_protocolo() {

@@ -77,7 +77,7 @@ impl Frontend for JsonSink {
         self.emit(json!({"type":"warn","message":msg}));
     }
 
-    fn approve(&mut self, policy: Policy, scope: &str, preview: &Preview) -> bool {
+    fn approve(&mut self, policy: Policy, scope: &str, id: &str, preview: &Preview) -> bool {
         if policy == Policy::Auto {
             return true;
         }
@@ -86,6 +86,7 @@ impl Frontend for JsonSink {
         }
         self.emit(json!({
             "type": "gate_request",
+            "id": id,
             "scope": scope,
             "policy": policy.as_str(),
             "preview": preview_json(preview),

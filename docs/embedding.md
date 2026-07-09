@@ -17,7 +17,8 @@ anna --json -p "explique o projeto"
 - **cwd** = a raiz do projeto que a Anna vai inspecionar (a detecção de git/ANNA.md
   usa o diretório de trabalho do processo).
 - **API key**: o host exporta `SHVIA_API_KEY` no ambiente do filho. **Nunca** por
-  argumento (aparece em `ps`). `--model`/`--url` são opcionais.
+  argumento (aparece em `ps`). `--model` (perfil `modelo@servidor`), `--effort`
+  (`low`…`max`, repassado ao gateway) e `--url` são opcionais.
 
 ## Fluxo (stdin ↔ stdout)
 
@@ -29,7 +30,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 |-------|--------|
 | `{"type":"user","text":"..."}` | inicia um turno (modo persistente) |
 | `{"type":"exit"}` | encerra o motor |
-| `{"decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`** (só enquanto um está pendente) |
+| `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`** (o `id` correlaciona a proposta; o motor bloqueia por ordem, então o `id` é conferência) |
 
 ### `anna` → Host (stdout)
 
@@ -39,7 +40,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | `text` | `delta` | pedaço da resposta (streaming) |
 | `tool_call` | `id`, `name`, `arguments` | a Anna vai usar uma ferramenta |
 | `tool_result` | `id`, `name`, `bytes`, `content` | resultado da ferramenta (já executada) |
-| `gate_request` | `scope`, `policy`, `preview` | **pede aprovação** — o motor BLOQUEIA até a decisão |
+| `gate_request` | `id`, `scope`, `policy`, `preview` | **pede aprovação** — o motor BLOQUEIA até a decisão (`id` = o `tool_call.id`, casa com o `tool_result`) |
 | `usage` | `tokens`, `cost`, `estimated` | telemetria do turno |
 | `turn_done` | — | turno terminou; pode mandar o próximo `user` |
 | `error` / `warn` | `message` | erro fatal do turno / aviso |
@@ -55,7 +56,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 ### O handshake de aprovação
 
 ```
-anna → {"type":"gate_request","scope":"edit_file","policy":"confirm",
+anna → {"type":"gate_request","id":"call_1","scope":"edit_file","policy":"confirm",
         "preview":{"kind":"diff","path":"src/x.rs","diff":"  ✎ src/x.rs\n  - a\n  + b\n"}}
         (BLOQUEIA)
 host → (renderiza o diff, mostra Aprovar/Negar)

@@ -51,6 +51,10 @@ struct Cli {
     #[arg(long, value_name = "PERFIL")]
     model: Option<String>,
 
+    /// Esforço de raciocínio: low|medium|high|xhigh|max (o gateway valida).
+    #[arg(long, value_name = "NÍVEL")]
+    effort: Option<String>,
+
     /// Motor headless: emite eventos em NDJSON e lê comandos/decisões no stdin
     /// (pra embutir o `anna` noutra casca — docs/embedding.md).
     #[arg(long)]
@@ -97,6 +101,9 @@ fn main() -> anyhow::Result<()> {
     let mut cfg = Config::load(cli.url.clone())?;
     if let Some(m) = cli.model.clone() {
         cfg.profile = Some(m);
+    }
+    if let Some(e) = cli.effort.clone() {
+        cfg.effort = Some(e);
     }
 
     // Subcomandos.
@@ -329,6 +336,7 @@ fn print_config(cfg: &Config) {
     println!("anna {}", VERSION.trim());
     println!("url    : {}", cfg.url);
     println!("perfil : {}", cfg.profile.clone().unwrap_or_else(|| "(default do usuário)".into()));
+    println!("esforço: {}", cfg.effort.clone().unwrap_or_else(|| "(default do servidor)".into()));
     println!(
         "chave  : {}",
         if cfg.api_key.is_some() { "definida (env/config)" } else { "AUSENTE — exporte SHVIA_API_KEY" }

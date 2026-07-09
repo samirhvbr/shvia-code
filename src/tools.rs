@@ -1,15 +1,17 @@
 //! Ferramentas locais (docs/ferramentas.md). Registry: nome → schema JSON
 //! (enviado ao modelo) + executor. Leitura (C1) + escrita/exec/git (C2). Tudo
 //! confinado à raiz do projeto (guard) e respeitando `.gitignore` (ignore).
-//! Gate por ferramenta: leitura/git-read = `Auto`; edit/write/git_commit =
-//! `Confirm` (mostra diff/comando antes); bash = classificado
-//! (allowlist/confirm/destrutivo). Nada escreve/roda sem o dev ver.
+//! Gate por ferramenta via `Frontend`: leitura/git-read = `Auto`;
+//! edit/write/git_commit = `Confirm` (monta o `Preview` — diff/comando — e o
+//! frontend mostra + pergunta); bash = classificado. Nada escreve/roda sem
+//! aprovação. As ferramentas NÃO imprimem nada direto (quem renderiza é o
+//! frontend — CLI ANSI ou JSON) → o mesmo executor serve terminal e host.
 //!
 //! (Um único arquivo no C1/C2; split em `tools/{fs,edit,shell,git}.rs` é cleanup
 //! futuro — ver docs/arquitetura-cli.md.)
 
-use crate::diff;
-use crate::gate::{Gate, Policy};
+use crate::frontend::Frontend;
+use crate::gate::{Policy, Preview};
 use crate::guard;
 use crate::types::{ToolCall, ToolDef};
 use globset::Glob;
@@ -71,7 +73,8 @@ pub fn defs() -> Vec<ToolDef> {
 }
 
 /// Executa um tool call localmente e devolve o `content` da mensagem role=tool.
-pub fn run(call: &ToolCall, root: &Path, gate: &mut Gate) -> String {
+/// O `fe` (frontend) decide as aprovações e renderiza os previews.
+pub fn run(call: &ToolCall, root: &Path, fe: &mut dyn Frontend) -> String {
     let a = &call.arguments;
     let s = |k: &str| a.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
     let b = |k: &str| a.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -83,16 +86,16 @@ pub fn run(call: &ToolCall, root: &Path, gate: &mut Gate) -> String {
         "list_dir" => list_dir(root, &s("path")),
         "grep" => grep(root, &s("pattern"), &s("path"), &s("glob")),
         "glob" => glob_files(root, &s("pattern")),
-        "edit_file" => edit_file(root, &s("path"), &s("old_string"), &s("new_string"), b("replace_all"), gate),
-        "write_file" => write_file(root, &s("path"), &s("content"), gate),
-        "bash" => bash(root, &s("command"), &s("why"), gate),
+        "edit_file" => edit_file(root, &s("path"), &s("old_string"), &s("new_string"), b("replace_all"), fe),
+        "write_file" => write_file(root, &s("path"), &s("content"), fe),
+        "bash" => bash(root, &s("command"), &s("why"), fe),
         "git_status" => run_git(root, &["status", "--short", "--branch"]),
         "git_diff" => {
             let mut args = vec!["diff"];
             if b("staged") { args.push("--staged"); }
             run_git(root, &args)
         }
-        "git_commit" => git_commit(root, &s("message"), b("add_all"), gate),
+        "git_commit" => git_commit(root, &s("message"), b("add_all"), fe),
         other => format!("ERRO: ferramenta desconhecida '{other}'."),
     }
 }
@@ -217,9 +220,9 @@ fn glob_files(root: &Path, pattern: &str) -> String {
     if found.is_empty() { "(nenhum arquivo)".into() } else { found.join("\n") }
 }
 
-// ── Escrita (C2) — diff + confirmação ───────────────────────────────────────
+// ── Escrita (C2) — Preview + aprovação via frontend ─────────────────────────
 
-fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, gate: &mut Gate) -> String {
+fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, fe: &mut dyn Frontend) -> String {
     if guard::denied(path) {
         return format!("RECUSADO: '{path}' está na denylist de segredos (SECURITY §2.3).");
     }
@@ -237,8 +240,8 @@ fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, g
         return format!("ERRO: old_string aparece {count}x — dê mais contexto pra ser único, ou use replace_all.");
     }
     let updated = if replace_all { content.replace(old, new) } else { content.replacen(old, new, 1) };
-    print!("{}", diff::unified(path, &content, &updated));
-    if !gate.approve(Policy::Confirm, "edit_file") {
+    let preview = Preview::Diff { path, old: content.as_str(), new: updated.as_str() };
+    if !fe.approve(Policy::Confirm, "edit_file", &preview) {
         return "RECUSADO: edição cancelada pelo usuário.".into();
     }
     match std::fs::write(&full, updated) {
@@ -247,7 +250,7 @@ fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, g
     }
 }
 
-fn write_file(root: &Path, path: &str, content: &str, gate: &mut Gate) -> String {
+fn write_file(root: &Path, path: &str, content: &str, fe: &mut dyn Frontend) -> String {
     if guard::denied(path) {
         return format!("RECUSADO: '{path}' está na denylist de segredos (SECURITY §2.3).");
     }
@@ -259,8 +262,8 @@ fn write_file(root: &Path, path: &str, content: &str, gate: &mut Gate) -> String
         return format!("ok — '{path}' já tem esse conteúdo (sem mudanças).");
     }
     let existed = full.exists();
-    print!("{}", diff::unified(path, &old, content));
-    if !gate.approve(Policy::Confirm, "write_file") {
+    let preview = Preview::Diff { path, old: old.as_str(), new: content };
+    if !fe.approve(Policy::Confirm, "write_file", &preview) {
         return "RECUSADO: escrita cancelada pelo usuário.".into();
     }
     match std::fs::write(&full, content) {
@@ -271,14 +274,13 @@ fn write_file(root: &Path, path: &str, content: &str, gate: &mut Gate) -> String
 
 // ── Shell (C2) — classificação + captura ────────────────────────────────────
 
-fn bash(root: &Path, command: &str, why: &str, gate: &mut Gate) -> String {
+fn bash(root: &Path, command: &str, why: &str, fe: &mut dyn Frontend) -> String {
     if command.trim().is_empty() {
         return "ERRO: comando vazio.".into();
     }
     let policy = classify(command);
-    let why_suffix = if why.is_empty() { String::new() } else { format!("   # {why}") };
-    println!("  $ {command}{why_suffix}");
-    if !gate.approve(policy, "bash") {
+    let preview = Preview::Command { command, why };
+    if !fe.approve(policy, "bash", &preview) {
         return "RECUSADO: comando cancelado pelo usuário.".into();
     }
     match Command::new("sh").arg("-c").arg(command).current_dir(root).output() {
@@ -362,7 +364,7 @@ fn run_git(root: &Path, args: &[&str]) -> String {
     }
 }
 
-fn git_commit(root: &Path, message: &str, add_all: bool, gate: &mut Gate) -> String {
+fn git_commit(root: &Path, message: &str, add_all: bool, fe: &mut dyn Frontend) -> String {
     if message.trim().is_empty() {
         return "ERRO: mensagem de commit vazia.".into();
     }
@@ -376,8 +378,8 @@ fn git_commit(root: &Path, message: &str, add_all: bool, gate: &mut Gate) -> Str
     if staged == "(sem saída)" {
         return "ERRO: nada staged pra commitar (use add_all=true ou faça git add antes).".into();
     }
-    println!("  commit:\n{staged}\n  mensagem: {message}");
-    if !gate.approve(Policy::Confirm, "git_commit") {
+    let preview = Preview::Commit { stat: staged.as_str(), message };
+    if !fe.approve(Policy::Confirm, "git_commit", &preview) {
         return "RECUSADO: commit cancelado pelo usuário.".into();
     }
     run_git(root, &["commit", "-m", message])
@@ -387,6 +389,7 @@ fn git_commit(root: &Path, message: &str, add_all: bool, gate: &mut Gate) -> Str
 mod tests {
     use super::*;
     use crate::gate::Policy;
+    use crate::ui::Ui;
 
     fn sandbox() -> std::path::PathBuf {
         // Dir ÚNICO por chamada (os testes rodam em paralelo — não podem
@@ -432,33 +435,31 @@ mod tests {
 
     #[test]
     fn write_e_edit_aplicam_com_aprovacao() {
-        use crate::gate::Gate;
         let root = sandbox();
-        let mut gate = Gate::allowing(&["write_file", "edit_file"]);
+        let mut fe = Ui::allowing(&["write_file", "edit_file"]);
 
-        let r = write_file(&root, "novo.txt", "linha\n", &mut gate);
+        let r = write_file(&root, "novo.txt", "linha\n", &mut fe);
         assert!(r.starts_with("ok"), "{r}");
         assert_eq!(std::fs::read_to_string(root.join("novo.txt")).unwrap(), "linha\n");
 
-        let r2 = edit_file(&root, "src/main.rs", "let bug = 1;", "let ok = 1;", false, &mut gate);
+        let r2 = edit_file(&root, "src/main.rs", "let bug = 1;", "let ok = 1;", false, &mut fe);
         assert!(r2.starts_with("ok"), "{r2}");
         assert!(std::fs::read_to_string(root.join("src/main.rs")).unwrap().contains("let ok = 1;"));
     }
 
     #[test]
     fn write_recusa_denylist() {
-        use crate::gate::Gate;
         let root = sandbox();
-        let mut gate = Gate::allowing(&["write_file"]);
-        assert!(write_file(&root, ".env", "x", &mut gate).starts_with("RECUSADO"));
+        let mut fe = Ui::allowing(&["write_file"]);
+        assert!(write_file(&root, ".env", "x", &mut fe).starts_with("RECUSADO"));
     }
 
     #[test]
     fn edit_exige_old_string_unico() {
         let root = sandbox();
         std::fs::write(root.join("dup.txt"), b"x\nx\n").unwrap();
-        let mut gate = crate::gate::Gate::new(true); // non-interativo: Confirm nega
-        let r = edit_file(&root, "dup.txt", "x", "y", false, &mut gate);
+        let mut fe = Ui::new(true); // non-interativo: Confirm nega (mas nem chega lá)
+        let r = edit_file(&root, "dup.txt", "x", "y", false, &mut fe);
         assert!(r.contains("aparece 2x"), "esperava erro de não-único: {r}");
     }
 }

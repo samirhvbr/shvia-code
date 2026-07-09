@@ -2,15 +2,18 @@
 //!
 //! REPL (ou `-p` não-interativo) que conversa com a Anna: ela lê (read/grep),
 //! edita (diff+confirma), roda bash e git com aprovação. Sessões locais
-//! (retomar/listar), troca de modelo com `/model`. Protocolo: docs/protocolo.md.
-//! Segurança: SECURITY_GUIDELINES.md.
+//! (retomar/listar), troca de modelo com `/model`. Modo `--json` = motor
+//! headless (NDJSON) pra embutir noutra casca (docs/embedding.md). Protocolo:
+//! docs/protocolo.md. Segurança: SECURITY_GUIDELINES.md.
 
 mod agent;
 mod api;
 mod config;
 mod diff;
+mod frontend;
 mod gate;
 mod guard;
+mod json;
 mod project;
 mod render;
 mod session;
@@ -21,7 +24,7 @@ mod ui;
 
 use clap::{Parser, Subcommand};
 use config::Config;
-use gate::Gate;
+use frontend::Frontend;
 use project::Project;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
@@ -46,6 +49,11 @@ struct Cli {
     /// Modelo/perfil desta execução (senão o default do usuário).
     #[arg(long, value_name = "PERFIL")]
     model: Option<String>,
+
+    /// Motor headless: emite eventos em NDJSON e lê comandos/decisões no stdin
+    /// (pra embutir o `anna` noutra casca — docs/embedding.md).
+    #[arg(long)]
+    json: bool,
 
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -115,16 +123,48 @@ fn main() -> anyhow::Result<()> {
 
     let project = Project::detect();
     let rt = tokio::runtime::Runtime::new()?;
-    let mut ui = Ui::new();
     let non_interactive = cli.prompt.is_some();
-    let mut gate = Gate::new(non_interactive);
     let mut telemetry = Telemetry::default();
+
+    // Motor headless (NDJSON) — pra embutir noutra casca (docs/embedding.md).
+    if cli.json {
+        let mut fe = json::JsonSink::new();
+        let mut messages = vec![Message::system(project.system_prompt())];
+        if let Some(prompt) = cli.prompt {
+            run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, prompt);
+        } else {
+            // Persistente: o host manda {"type":"user","text":"..."} por linha.
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let t = line.trim();
+                if t.is_empty() {
+                    continue;
+                }
+                let v: serde_json::Value = serde_json::from_str(t).unwrap_or(serde_json::Value::Null);
+                match v.get("type").and_then(|x| x.as_str()) {
+                    Some("user") => {
+                        let text = v.get("text").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+                        run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, text);
+                    }
+                    Some("exit") => break,
+                    _ => {}
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let mut ui = Ui::new(non_interactive);
     let mut messages = vec![Message::system(project.system_prompt())];
 
     // Modo não-interativo: uma pergunta e sai.
     if let Some(prompt) = cli.prompt {
         messages.push(Message::user(prompt));
-        rt.block_on(agent::run_turn(&cfg, &mut messages, &project, &mut ui, &mut telemetry, &mut gate))?;
+        rt.block_on(agent::run_turn(&cfg, &mut messages, &project, &mut ui, &mut telemetry))?;
         return Ok(());
     }
 
@@ -221,7 +261,7 @@ fn main() -> anyhow::Result<()> {
                 // Pergunta normal.
                 messages.push(Message::user(line));
                 if let Err(e) = rt.block_on(agent::run_turn(
-                    &cfg, &mut messages, &project, &mut ui, &mut telemetry, &mut gate,
+                    &cfg, &mut messages, &project, &mut ui, &mut telemetry,
                 )) {
                     ui.error(&e.to_string());
                 }
@@ -243,6 +283,22 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Uma volta no modo headless: empurra a pergunta, roda o loop, e erro vira evento.
+fn run_json_turn(
+    rt: &tokio::runtime::Runtime,
+    cfg: &Config,
+    messages: &mut Vec<Message>,
+    project: &Project,
+    fe: &mut dyn Frontend,
+    tel: &mut Telemetry,
+    text: String,
+) {
+    messages.push(Message::user(text));
+    if let Err(e) = rt.block_on(agent::run_turn(cfg, messages, project, fe, tel)) {
+        fe.error(&e.to_string());
+    }
 }
 
 fn print_config(cfg: &Config) {

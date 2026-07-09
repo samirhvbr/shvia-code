@@ -1,9 +1,14 @@
-//! Render no terminal: streaming da resposta (com markdown leve por linha),
-//! linhas de ferramenta, rodapé de custo. O input mora no `main` (rustyline);
-//! aqui é só a saída. Cores por ANSI simples. Markdown: `render`. TUI = evolução.
+//! `Ui` — o `Frontend` do terminal: streaming com markdown por linha (`render`),
+//! linhas de ferramenta, rodapé de custo, E o gate (mostra o preview em ANSI +
+//! pergunta no stdin). Quem mostra é quem pergunta. O `JsonSink` é o par headless.
 
+use crate::diff;
+use crate::frontend::Frontend;
+use crate::gate::{self, Policy, Preview};
 use crate::render;
+use crate::telemetry::Telemetry;
 use crate::types::{Event, ToolCall};
+use std::collections::HashSet;
 
 const CYAN: &str = "\x1b[1;36m";
 const GREEN: &str = "\x1b[92m";
@@ -17,11 +22,25 @@ pub struct Ui {
     label_shown: bool,
     line_buf: String,
     in_code: bool,
+    /// Escopos liberados por "tudo nesta sessão".
+    allowed: HashSet<String>,
+    /// `anna -p`: nega escrita/bash por padrão (sem quem confirmar).
+    non_interactive: bool,
 }
 
 impl Ui {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(non_interactive: bool) -> Self {
+        Self { non_interactive, ..Default::default() }
+    }
+
+    /// Só para testes: pré-libera escopos (mesmo caminho do "tudo nesta sessão").
+    #[cfg(test)]
+    pub fn allowing(scopes: &[&str]) -> Self {
+        let mut u = Self::default();
+        for s in scopes {
+            u.allowed.insert((*s).to_string());
+        }
+        u
     }
 
     pub fn banner(&self, text: &str) {
@@ -30,31 +49,6 @@ impl Ui {
 
     pub fn note(&self, text: &str) {
         println!("{GRAY}{text}{RESET}");
-    }
-
-    /// Renderiza um evento ao vivo (chamado pelo api::code_chat). O texto é
-    /// acumulado e liberado **por linha** — assim o markdown é estilizado quando
-    /// a linha fica completa, sem quebrar o streaming.
-    pub fn on_event(&mut self, ev: &Event) {
-        match ev {
-            Event::TextDelta(d) => {
-                for ch in d.chars() {
-                    if ch == '\n' {
-                        let line = std::mem::take(&mut self.line_buf);
-                        self.print_line(&line);
-                    } else {
-                        self.line_buf.push(ch);
-                    }
-                }
-            }
-            Event::ToolCall(c) => {
-                self.flush_pending();
-                println!("{GRAY}  ⚙ {}({}){RESET}", c.name, compact_args(c));
-            }
-            // Raciocínio, model, usage, etc. não renderizam aqui.
-            Event::ReasoningDelta | Event::Model { .. } | Event::Usage(_) | Event::Error(_)
-            | Event::Done { .. } | Event::Other => {}
-        }
     }
 
     fn flush_pending(&mut self) {
@@ -77,15 +71,49 @@ impl Ui {
         println!("{}", render::style_line(line, self.in_code));
     }
 
-    /// Fecha o bloco de texto da volta (libera a última linha pendente).
-    pub fn end_stream(&mut self) {
+    fn render_preview(&self, preview: &Preview) {
+        match preview {
+            Preview::Diff { path, old, new } => print!("{}", diff::unified(path, old, new, true)),
+            Preview::Command { command, why } => {
+                let suffix = if why.is_empty() { String::new() } else { format!("   # {why}") };
+                println!("  $ {command}{suffix}");
+            }
+            Preview::Commit { stat, message } => {
+                println!("  commit:\n{stat}\n  mensagem: {message}");
+            }
+        }
+    }
+}
+
+impl Frontend for Ui {
+    fn on_event(&mut self, ev: &Event) {
+        match ev {
+            Event::TextDelta(d) => {
+                for ch in d.chars() {
+                    if ch == '\n' {
+                        let line = std::mem::take(&mut self.line_buf);
+                        self.print_line(&line);
+                    } else {
+                        self.line_buf.push(ch);
+                    }
+                }
+            }
+            Event::ToolCall(c) => {
+                self.flush_pending();
+                println!("{GRAY}  ⚙ {}({}){RESET}", c.name, compact_args(c));
+            }
+            Event::ReasoningDelta | Event::Model { .. } | Event::Usage(_) | Event::Error(_)
+            | Event::Done { .. } | Event::Other => {}
+        }
+    }
+
+    fn end_stream(&mut self) {
         self.flush_pending();
         self.label_shown = false;
         self.in_code = false;
     }
 
-    /// Resultado de uma ferramenta executada localmente.
-    pub fn tool_result(&self, call: &ToolCall, out: &str) {
+    fn tool_result(&mut self, call: &ToolCall, out: &str) {
         let first = out.lines().next().unwrap_or("");
         let mark = if out.starts_with("ERRO") || out.starts_with("RECUSADO") { RED } else { GRAY };
         println!(
@@ -96,16 +124,41 @@ impl Ui {
         );
     }
 
-    pub fn footer(&self, text: &str) {
-        println!("{GRAY}{text}{RESET}");
+    fn turn_end(&mut self, tel: &Telemetry) {
+        println!("{GRAY}{}{RESET}", tel.footer());
     }
 
-    pub fn error(&self, text: &str) {
-        println!("{RED}erro: {text}{RESET}");
+    fn error(&mut self, msg: &str) {
+        println!("{RED}erro: {msg}{RESET}");
     }
 
-    pub fn warn(&self, text: &str) {
-        println!("{YELLOW}{text}{RESET}");
+    fn warn(&mut self, msg: &str) {
+        println!("{YELLOW}{msg}{RESET}");
+    }
+
+    fn approve(&mut self, policy: Policy, scope: &str, preview: &Preview) -> bool {
+        match policy {
+            Policy::Auto => true,
+            Policy::Confirm if self.allowed.contains(scope) => true,
+            _ => {
+                self.render_preview(preview);
+                if self.non_interactive {
+                    return false;
+                }
+                if policy == Policy::Always {
+                    matches!(gate::ask("  AÇÃO DESTRUTIVA — confirmar? [s]im / [n]ão > "), 'S' | 's')
+                } else {
+                    match gate::ask("  aplicar? [s]im / [n]ão / [t]udo nesta sessão > ") {
+                        'S' | 's' => true,
+                        'T' | 't' => {
+                            self.allowed.insert(scope.to_string());
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+            }
+        }
     }
 }
 

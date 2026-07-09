@@ -69,8 +69,35 @@
   - `Message` ganhou `Deserialize` (persistência de sessão).
   - ✅ clippy `-D warnings` limpo · **10 testes** verdes (novo: render markdown) ·
     smoke offline ok (`config`, `sessions`, `--help`, round-trip).
-- **Próximo: C4 (distribuição/dogfood)** — usar o `anna` pra desenvolver o próprio
-  `anna`; empacotar (build-local já gera binário+checksum); ANNA.md do repo. Trava
-  só no **smoke ao vivo** (API key + 2.16.0) — o resto do CLI está completo p/ leitura,
-  escrita, exec, git, sessões e markdown. Alternativa: **C5** (motor na aba Agente do
-  SShvTerm).
+- **09/07/2026 — C4 CODADO (0.4.0): distribuição + preparo do dogfood.**
+  - **`install.sh`** põe o `anna` no PATH (~/.local/bin, sem sudo), reusando o
+    build-local (preflight+release+checksum); validado (instala + `anna --version`).
+  - **`ANNA.md`** = contexto do próprio repo, lido pelo `anna` (prioridade sobre
+    CLAUDE.md via project.rs): invariantes, manter-verde, commit, mapa de módulos.
+  - **`scripts/dogfood.sh`** = harness do DoD (tarefas leitura/bash/git em `-p`
+    com a chave; senão orienta; edição/commit ficam no REPL por causa dos gates).
+  - **FIX:** o system prompt (`project.rs`) ainda dizia só-leitura (resquício do
+    C1) → agora descreve leitura+escrita+bash+git e o fluxo com gates. README atualizado.
+  - ✅ clippy `-D warnings` limpo · 10 testes verdes · install.sh rodado de verdade.
+- **09/07/2026 — C5.1 CODADO (0.5.0): o motor virou EMBUTÍVEL.**
+  - Trait **`Frontend`** (render de eventos + decisão de aprovação) com 2 impls:
+    `Ui` (terminal ANSI+stdin, comportamento intacto) e **`JsonSink`** (`anna --json`,
+    **NDJSON** bidirecional). As ferramentas não imprimem mais direto — montam um
+    `Preview` (diff/comando/commit) e o frontend renderiza. `diff` ganhou modo sem-cor.
+  - `anna --json` (persistente: host manda `{"type":"user",...}`; one-shot com `-p`);
+    aprovação por handshake (`gate_request` → host responde `{"decision":...}` no stdin).
+  - Protocolo: [docs/embedding.md](../docs/embedding.md). Decisão: [ADR-002](../docs/decisoes.md).
+  - ✅ clippy `-D warnings` limpo · **10 testes** verdes (tests de escrita agora usam
+    `Ui` como Frontend) · smoke offline do `--json` ok (evento de erro NDJSON válido).
+- **Achado que reformata o C5:** a aba Agente do **SShvTerm** (`~/x/SSHVTERM-DESKTOP`,
+  branch `claude/ai-agent-vm-access-dkzii2`) **já é um agente completo, em Python**
+  (sidecar WS-RPC): providers, política allow/ask/deny, redação de segredos, diálogo
+  de aprovação, e **execução no terminal visível / host SSH** + auditoria. Seam:
+  provider externo `sidecar/agent/providers/external.py` que spawna o `anna` e lê NDJSON.
+- **DECISÃO PENDENTE (ADR-002) antes de tocar no SShvTerm:** modelo de execução —
+  **A** (`anna` executa local, é o `--json` atual) vs **B** (`anna` PROPÕE, o SShvTerm
+  executa no lugar certo com a política/PTY/SSH/auditoria dele). **Recomendo B** pro
+  SShvTerm. B = **C5.2** (`--tools host` + abstração `ToolRunner` no `anna`) + **C5.3**
+  (provider no sidecar Python). Só começa após o OK do Samir (mexe na branch ativa).
+- **Falta ainda (bloqueio geral): SMOKE AO VIVO** — `SHVIA_API_KEY` + gateway 2.16.0:
+  fecha o C0 (`spikes/c0-gateway.php`) e o dogfood do C4, e valida o stream `--json` real.

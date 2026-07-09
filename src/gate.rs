@@ -1,9 +1,7 @@
-//! Política de aprovação (docs/ferramentas.md §1). No C1 todas as tools são
-//! read-only (`Auto`) — o gate não pergunta nada. `Confirm`/`Always` já existem
-//! aqui pro C2 (edit/write/bash), com memória de "tudo nesta sessão" por escopo.
-//! **Não existe modo yolo.**
+//! Política de aprovação + o que mostrar antes de aprovar. A DECISÃO e o RENDER
+//! do preview moram no `Frontend` (CLI = ANSI+stdin; JSON = evento+stdin),
+//! porque quem mostra é quem pergunta. **Não existe modo yolo.**
 
-use std::collections::HashSet;
 use std::io::{self, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,61 +14,25 @@ pub enum Policy {
     Always,
 }
 
-#[derive(Default)]
-pub struct Gate {
-    /// Escopos liberados por "tudo nesta sessão".
-    allowed: HashSet<String>,
-    /// Modo não-interativo (`anna -p`): nega escrita/bash por padrão.
-    non_interactive: bool,
-}
-
-impl Gate {
-    pub fn new(non_interactive: bool) -> Self {
-        Self { allowed: HashSet::new(), non_interactive }
-    }
-
-    /// Só para testes: pré-libera escopos (usa o mesmo caminho do "tudo nesta
-    /// sessão", não um bypass — Always continua pedindo).
-    #[cfg(test)]
-    pub fn allowing(scopes: &[&str]) -> Self {
-        let mut g = Self::default();
-        for s in scopes {
-            g.allowed.insert((*s).to_string());
-        }
-        g
-    }
-
-    /// Decide se a ação pode rodar. `scope` = tool + alvo (p/ o "tudo": ex.
-    /// "edit_file"). `preview` = o que será feito (diff/comando) já renderizado
-    /// pelo chamador; aqui só perguntamos.
-    pub fn approve(&mut self, policy: Policy, scope: &str) -> bool {
-        match policy {
-            Policy::Auto => true,
-            Policy::Confirm if self.allowed.contains(scope) => true,
-            Policy::Confirm => {
-                if self.non_interactive {
-                    return false; // -p sem --allow-writes nega escrita
-                }
-                match prompt("  aplicar? [s]im / [n]ão / [t]udo nesta sessão > ") {
-                    'S' | 's' => true,
-                    'T' | 't' => {
-                        self.allowed.insert(scope.to_string());
-                        true
-                    }
-                    _ => false,
-                }
-            }
-            Policy::Always => {
-                if self.non_interactive {
-                    return false;
-                }
-                matches!(prompt("  AÇÃO DESTRUTIVA — confirmar? [s]im / [n]ão > "), 'S' | 's')
-            }
+impl Policy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Policy::Auto => "auto",
+            Policy::Confirm => "confirm",
+            Policy::Always => "always",
         }
     }
 }
 
-fn prompt(msg: &str) -> char {
+/// O que será aprovado, montado pela ferramenta e renderizado pelo frontend.
+pub enum Preview<'a> {
+    Diff { path: &'a str, old: &'a str, new: &'a str },
+    Command { command: &'a str, why: &'a str },
+    Commit { stat: &'a str, message: &'a str },
+}
+
+/// Prompt de 1 caractere no stdin (usado pelo frontend CLI).
+pub fn ask(msg: &str) -> char {
     print!("{msg}");
     let _ = io::stdout().flush();
     let mut line = String::new();

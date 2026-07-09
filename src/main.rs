@@ -16,13 +16,14 @@ mod guard;
 mod json;
 mod project;
 mod render;
+mod runner;
 mod session;
 mod telemetry;
 mod tools;
 mod types;
 mod ui;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use frontend::Frontend;
 use project::Project;
@@ -55,8 +56,19 @@ struct Cli {
     #[arg(long)]
     json: bool,
 
+    /// Quem executa as ferramentas: `local` (o anna, default) ou `host` (o anna
+    /// PROPÕE e a casca externa executa — só com --json; ADR-002 modelo B).
+    #[arg(long, value_enum, default_value = "local")]
+    tools: ToolsMode,
+
     #[command(subcommand)]
     cmd: Option<Cmd>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ToolsMode {
+    Local,
+    Host,
 }
 
 #[derive(Subcommand)]
@@ -126,12 +138,19 @@ fn main() -> anyhow::Result<()> {
     let non_interactive = cli.prompt.is_some();
     let mut telemetry = Telemetry::default();
 
+    // Quem executa as tools: local (o anna) ou host (só com --json; ADR-002 B).
+    let mut runner: Box<dyn runner::ToolRunner> = if cli.json && matches!(cli.tools, ToolsMode::Host) {
+        Box::new(runner::HostRunner)
+    } else {
+        Box::new(runner::LocalRunner)
+    };
+
     // Motor headless (NDJSON) — pra embutir noutra casca (docs/embedding.md).
     if cli.json {
         let mut fe = json::JsonSink::new();
         let mut messages = vec![Message::system(project.system_prompt())];
         if let Some(prompt) = cli.prompt {
-            run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, prompt);
+            run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), prompt);
         } else {
             // Persistente: o host manda {"type":"user","text":"..."} por linha.
             let mut line = String::new();
@@ -148,7 +167,7 @@ fn main() -> anyhow::Result<()> {
                 match v.get("type").and_then(|x| x.as_str()) {
                     Some("user") => {
                         let text = v.get("text").and_then(|x| x.as_str()).unwrap_or_default().to_string();
-                        run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, text);
+                        run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), text);
                     }
                     Some("exit") => break,
                     _ => {}
@@ -164,7 +183,7 @@ fn main() -> anyhow::Result<()> {
     // Modo não-interativo: uma pergunta e sai.
     if let Some(prompt) = cli.prompt {
         messages.push(Message::user(prompt));
-        rt.block_on(agent::run_turn(&cfg, &mut messages, &project, &mut ui, &mut telemetry))?;
+        rt.block_on(agent::run_turn(&cfg, &mut messages, &project, &mut ui, &mut telemetry, runner.as_mut()))?;
         return Ok(());
     }
 
@@ -261,7 +280,7 @@ fn main() -> anyhow::Result<()> {
                 // Pergunta normal.
                 messages.push(Message::user(line));
                 if let Err(e) = rt.block_on(agent::run_turn(
-                    &cfg, &mut messages, &project, &mut ui, &mut telemetry,
+                    &cfg, &mut messages, &project, &mut ui, &mut telemetry, runner.as_mut(),
                 )) {
                     ui.error(&e.to_string());
                 }
@@ -286,6 +305,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Uma volta no modo headless: empurra a pergunta, roda o loop, e erro vira evento.
+#[allow(clippy::too_many_arguments)]
 fn run_json_turn(
     rt: &tokio::runtime::Runtime,
     cfg: &Config,
@@ -293,10 +313,11 @@ fn run_json_turn(
     project: &Project,
     fe: &mut dyn Frontend,
     tel: &mut Telemetry,
+    runner: &mut dyn runner::ToolRunner,
     text: String,
 ) {
     messages.push(Message::user(text));
-    if let Err(e) = rt.block_on(agent::run_turn(cfg, messages, project, fe, tel)) {
+    if let Err(e) = rt.block_on(agent::run_turn(cfg, messages, project, fe, tel, runner)) {
         fe.error(&e.to_string());
     }
 }

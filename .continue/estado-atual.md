@@ -94,10 +94,20 @@
   (sidecar WS-RPC): providers, política allow/ask/deny, redação de segredos, diálogo
   de aprovação, e **execução no terminal visível / host SSH** + auditoria. Seam:
   provider externo `sidecar/agent/providers/external.py` que spawna o `anna` e lê NDJSON.
-- **DECISÃO PENDENTE (ADR-002) antes de tocar no SShvTerm:** modelo de execução —
-  **A** (`anna` executa local, é o `--json` atual) vs **B** (`anna` PROPÕE, o SShvTerm
-  executa no lugar certo com a política/PTY/SSH/auditoria dele). **Recomendo B** pro
-  SShvTerm. B = **C5.2** (`--tools host` + abstração `ToolRunner` no `anna`) + **C5.3**
-  (provider no sidecar Python). Só começa após o OK do Samir (mexe na branch ativa).
+- **DECISÃO (ADR-002): Samir escolheu o Modelo B** (09/07) — o `anna` PROPÕE, o
+  SShvTerm executa no lugar certo (política/PTY/SSH/auditoria dele).
+- **09/07/2026 — C5.2 CODADO (0.5.1): o lado `anna` do Modelo B.**
+  - Abstração **`ToolRunner`**: `LocalRunner` (o `anna` executa — default, terminal
+    e `--json` sem host) e **`HostRunner`** (o `anna` só propõe: emite `tool_call`,
+    NÃO executa nem aprova, e espera o host injetar `{"type":"tool_result",...}` no
+    stdin, casando por id). `agent::run_turn` recebe `&mut dyn ToolRunner`.
+  - Flag **`--tools local|host`** (host só com `--json`). Em `host` não há
+    `gate_request` — quem aprova é o host. Doc: embedding.md §Execução.
+  - ✅ clippy limpo · 10 testes verdes · `--tools host` parseia e smoke NDJSON ok.
+    (O loop host-exec completo só se prova com o gateway + o lado Python.)
+- **Próximo: C5.3 — o provider no sidecar Python do SShvTerm** (`~/x/SSHVTERM-DESKTOP`,
+  `sidecar/agent/providers/external.py`): spawna `anna --json --tools host`, relaia
+  os eventos NDJSON pro loop `_run_and_respond` que já tem (aprovação/política/PTY/SSH/
+  auditoria). Mexe na branch ativa `claude/ai-agent-vm-access-dkzii2` → trabalho combinado.
 - **Falta ainda (bloqueio geral): SMOKE AO VIVO** — `SHVIA_API_KEY` + gateway 2.16.0:
   fecha o C0 (`spikes/c0-gateway.php`) e o dogfood do C4, e valida o stream `--json` real.

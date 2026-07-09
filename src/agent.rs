@@ -8,6 +8,7 @@ use crate::api;
 use crate::config::Config;
 use crate::frontend::Frontend;
 use crate::project::Project;
+use crate::runner::ToolRunner;
 use crate::telemetry::Telemetry;
 use crate::tools;
 use crate::types::Message;
@@ -21,6 +22,7 @@ pub async fn run_turn(
     project: &Project,
     fe: &mut dyn Frontend,
     telemetry: &mut Telemetry,
+    runner: &mut dyn ToolRunner,
 ) -> Result<()> {
     for _round in 0..MAX_ROUNDS {
         let result =
@@ -39,12 +41,11 @@ pub async fn run_turn(
             return Ok(());
         }
 
-        // Modelo pediu ferramentas → executa cada uma LOCALMENTE (com aprovação
-        // via `fe`) e devolve os resultados (role=tool) pra próxima volta.
+        // Modelo pediu ferramentas → o `runner` decide onde executam (local =
+        // o anna; host = a casca externa) e devolve o resultado (role=tool).
         messages.push(Message::assistant(result.text.clone(), result.tool_calls.clone()));
         for call in &result.tool_calls {
-            let out = tools::run(call, &project.root, fe);
-            fe.tool_result(call, &out);
+            let out = runner.run(call, &project.root, fe);
             messages.push(Message::tool(call.id.clone(), out));
         }
     }

@@ -78,11 +78,28 @@ Se o stdin fechar com um `gate_request` pendente, o motor **nega** (seguro).
 ← {"type":"turn_done"}
 ```
 
+## Execução: `--tools local` vs `--tools host` (ADR-002)
+
+Quem roda as ferramentas:
+
+- **`--tools local`** (default): o **próprio `anna`** executa. `bash` roda na
+  máquina onde o `anna` está; a aprovação sai como `gate_request` (Modelo A).
+- **`--tools host`** (só faz sentido com `--json`): o `anna` **PROPÕE** — emite
+  `tool_call` e **não executa nem aprova**. O host roda com a política/PTY/SSH/
+  auditoria dele e injeta o resultado no stdin:
+
+  ```
+  anna → {"type":"tool_call","id":"c1","name":"bash","arguments":{"command":"ls"}}
+  host → (aplica SUA política; executa onde o usuário está)
+  host → {"type":"tool_result","id":"c1","content":"a.rs\nb.rs\n"}
+  ```
+
+  Neste modo **não há `gate_request`** — quem aprova é o host. É o **Modelo B** do
+  ADR-002, feito pra aba Agente do SShvTerm (que já tem política + exec no host).
+
 ## Segurança
 
 - Chave só via env (§ SECURITY 2.4); o host repassa no ambiente do filho.
 - O motor confina tudo à raiz do projeto (guard) e mantém a denylist de segredos.
-- **Quem executa as ferramentas:** no `--json` atual, o **próprio `anna`** executa
-  local (`bash` roda na máquina onde o `anna` está). Para o SShvTerm — que executa
-  no terminal visível / host SSH — há um segundo modelo (anna PROPÕE, o host
-  executa). Ver [decisoes.md](decisoes.md) **ADR-002**.
+- Em `--tools host`, o confinamento e a execução são do host — o `anna` só propõe;
+  a política do host (allow/ask/deny) é que manda.

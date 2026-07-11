@@ -251,6 +251,7 @@ fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, i
     if !fe.approve(Policy::Confirm, "edit_file", id, &preview) {
         return "RECUSADO: edição cancelada pelo usuário.".into();
     }
+    crate::checkpoint::snapshot(root, &format!("edit_file {path}"));
     match std::fs::write(&full, updated) {
         Ok(_) => format!("ok — {path} editado ({} ocorrência(s)).", if replace_all { count } else { 1 }),
         Err(e) => format!("ERRO: falha ao gravar '{path}': {e}"),
@@ -273,6 +274,7 @@ fn write_file(root: &Path, path: &str, content: &str, id: &str, fe: &mut dyn Fro
     if !fe.approve(Policy::Confirm, "write_file", id, &preview) {
         return "RECUSADO: escrita cancelada pelo usuário.".into();
     }
+    crate::checkpoint::snapshot(root, &format!("write_file {path}"));
     match std::fs::write(&full, content) {
         Ok(_) => format!("ok — '{path}' {} ({} bytes).", if existed { "sobrescrito" } else { "criado" }, content.len()),
         Err(e) => format!("ERRO: falha ao gravar '{path}': {e}"),
@@ -289,6 +291,11 @@ fn bash(root: &Path, command: &str, why: &str, id: &str, fe: &mut dyn Frontend) 
     let preview = Preview::Command { command, why };
     if !fe.approve(policy, "bash", id, &preview) {
         return "RECUSADO: comando cancelado pelo usuário.".into();
+    }
+    // Comando destrutivo aprovado: foto antes — /rollback devolve os arquivos
+    // RASTREADOS que ele apagar/alterar (o que estiver fora do git, não).
+    if is_destructive(command) {
+        crate::checkpoint::snapshot(root, &format!("bash destrutivo: {}", cap(command, 60)));
     }
     match Command::new("sh").arg("-c").arg(command).current_dir(root).output() {
         Ok(o) => {

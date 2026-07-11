@@ -8,6 +8,7 @@
 
 mod agent;
 mod api;
+mod checkpoint;
 mod config;
 mod diff;
 mod frontend;
@@ -246,6 +247,29 @@ fn main() -> anyhow::Result<()> {
                 if line == "/help" {
                     ui.note("Pergunte sobre o projeto — a Anna lê (read/grep), edita (diff+confirma), roda bash e git com aprovação.");
                     ui.note("/model [perfil] troca o modelo · /sessions lista · /tools ferramentas · /clear novo contexto · /exit");
+                    ui.note("/rollback mostra o que mudou desde o último checkpoint · /rollback aplicar restaura");
+                    continue;
+                }
+                // Checkpoint de segurança: toda edição aprovada tira uma foto
+                // (refs/anna/checkpoint). Duas etapas de propósito — ver antes
+                // de desfazer; restaurar é decisão explícita, nunca um Enter só.
+                if line == "/rollback" {
+                    match checkpoint::diff_stat(&project.root) {
+                        Some(stat) if !stat.trim().is_empty() => {
+                            ui.note("mudou desde o último checkpoint:");
+                            ui.note(&stat);
+                            ui.note("restaure com: /rollback aplicar (arquivos NOVOS pós-foto permanecem)");
+                        }
+                        Some(_) => ui.note("(nada mudou desde o último checkpoint)"),
+                        None => ui.note("(sem checkpoint ainda — a foto é tirada antes da primeira edição aprovada)"),
+                    }
+                    continue;
+                }
+                if line == "/rollback aplicar" {
+                    match checkpoint::restore(&project.root) {
+                        Ok(sha) => ui.note(&format!("working tree restaurada pro checkpoint {} (índice/branch intocados).", &sha[..sha.len().min(10)])),
+                        Err(e) => ui.error(&e),
+                    }
                     continue;
                 }
                 if line == "/clear" {

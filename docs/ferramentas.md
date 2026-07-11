@@ -125,7 +125,27 @@ Convenções do `content`:
 - `.gitignore` respeitado em list/grep/glob; `.git/` oculto.
 - Teto de voltas de tool por turno (default 25) no loop (SECURITY §2.7).
 
-## 5. Fora do v1 (futuro)
+## 5. Checkpoint automático & `/rollback` (0.8.0)
+
+Antes de toda mutação aprovada (`edit_file`, `write_file` e `bash` destrutivo),
+a anna fotografa o working tree num commit **fora da branch** (índice
+temporário via `GIT_INDEX_FILE` + `write-tree`/`commit-tree`), apontado por
+`refs/anna/checkpoint`. O índice real e a working tree **não são tocados** —
+`git status` do dev continua idêntico. Rajadas de edição num mesmo turno
+compartilham uma foto (debounce 30 s). Fora de repo git: silenciosamente
+desativado (rede de segurança, nunca bloqueia edição).
+
+Restaurar é ação do **dev** no REPL (nunca uma tool do modelo):
+
+- `/rollback` — mostra o `diff --stat` desde a foto (o que seria desfeito);
+- `/rollback aplicar` — restaura o conteúdo **rastreado** da foto na working
+  tree (índice/branch intocados). Limite documentado: arquivos **criados
+  depois** da foto permanecem no disco (remoção manual).
+
+Inspiração: checkpoints de filesystem do hermes-agent (`/rollback`), adaptados
+ao modelo client-side do anna — git como storage, zero estado fora do repo.
+
+## 6. Fora do v1 (futuro)
 
 `apply_patch` (multi-arquivo), `web_fetch`, `run_tests` estruturado, MCP/
 conectores, sandbox de execução, tools de refactor AST. Entram por ADR quando

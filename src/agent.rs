@@ -7,6 +7,7 @@
 use crate::api;
 use crate::config::Config;
 use crate::frontend::Frontend;
+use crate::memory;
 use crate::project::Project;
 use crate::runner::ToolRunner;
 use crate::telemetry::Telemetry;
@@ -23,6 +24,10 @@ pub async fn run_turn(
     telemetry: &mut Telemetry,
     runner: &mut dyn ToolRunner,
 ) -> Result<()> {
+    // Captura opcional (ai-memory): o prompt que abre o turno. No-op sem env.
+    if let Some(last) = messages.iter().rev().find(|m| m.role == "user") {
+        memory::user_prompt(&last.content);
+    }
     for _round in 0..MAX_ROUNDS {
         let result =
             api::code_chat(cfg, messages, runner.tool_defs(), &mut |ev| fe.on_event(ev)).await?;
@@ -45,6 +50,7 @@ pub async fn run_turn(
         messages.push(Message::assistant(result.text.clone(), result.tool_calls.clone()));
         for call in &result.tool_calls {
             let out = runner.run(call, &project.root, fe);
+            memory::tool_use(&call.name, &call.arguments, &out);
             messages.push(Message::tool(call.id.clone(), out));
         }
     }

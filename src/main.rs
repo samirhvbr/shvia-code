@@ -14,6 +14,7 @@ mod frontend;
 mod gate;
 mod guard;
 mod json;
+mod memory;
 mod project;
 mod render;
 mod runner;
@@ -141,6 +142,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     let project = Project::detect();
+    // Memória de longo prazo (ai-memory) — no-op sem AI_MEMORY_URL.
+    memory::init(&project.root);
     let rt = tokio::runtime::Runtime::new()?;
     let non_interactive = cli.prompt.is_some();
     let mut telemetry = Telemetry::default();
@@ -184,6 +187,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        memory::session_end_blocking(&rt);
         return Ok(());
     }
 
@@ -193,7 +197,9 @@ fn main() -> anyhow::Result<()> {
     // Modo não-interativo: uma pergunta e sai.
     if let Some(prompt) = cli.prompt {
         messages.push(Message::user(prompt));
-        rt.block_on(agent::run_turn(&cfg, &mut messages, &project, &mut ui, &mut telemetry, runner.as_mut()))?;
+        let turn = rt.block_on(agent::run_turn(&cfg, &mut messages, &project, &mut ui, &mut telemetry, runner.as_mut()));
+        memory::session_end_blocking(&rt);
+        turn?;
         return Ok(());
     }
 
@@ -311,6 +317,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+    memory::session_end_blocking(&rt);
     Ok(())
 }
 

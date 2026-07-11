@@ -111,3 +111,29 @@
   auditoria). Mexe na branch ativa `claude/ai-agent-vm-access-dkzii2` → trabalho combinado.
 - **Falta ainda (bloqueio geral): SMOKE AO VIVO** — `SHVIA_API_KEY` + gateway 2.16.0:
   fecha o C0 (`spikes/c0-gateway.php`) e o dogfood do C4, e valida o stream `--json` real.
+- **11/07/2026 — Checkpoint git automático + `/rollback` (0.8.0)** — do pool
+  "fáceis do Hermes" (comparativo Hermes×SHVIA):
+  - `src/checkpoint.rs`: antes de toda mutação APROVADA (edit/write/bash
+    destrutivo), foto do working tree em `refs/anna/checkpoint` via índice
+    temporário (`GIT_INDEX_FILE` + write-tree/commit-tree) — índice real, branch
+    e `git status` intocados; debounce 30 s; silencioso fora de git.
+  - REPL: `/rollback` (diff --stat desde a foto) e `/rollback aplicar` (restaura
+    conteúdo RASTREADO; arquivos criados pós-foto permanecem). Doc:
+    [docs/ferramentas.md §5](../docs/ferramentas.md). Restore é do DEV, nunca tool.
+  - ✅ clippy limpo · **14 testes** (2 novos: roundtrip foto→estrago→restore em
+    sandbox git; fora-de-git silencioso) · sincronizado o drift `Cargo.toml`
+    (0.6.0) → `version.md` (0.8.0).
+
+## 📌 Pendente de produção/distribuição (11/07/2026)
+
+O anna é CLI **client-side** — "produção" = binário novo nos lugares que o usam:
+
+- [ ] **Rebuild/reinstalar** o `anna` 0.8.0 nos hosts de uso (`build-local.sh` /
+      `install.sh`).
+- [ ] **SHVIA-DESKTOP (Modo Code)**: o desktop embarca o anna como sidecar —
+      re-empacotar o desktop com o binário 0.8.0 para o checkpoint/rollback valer lá.
+- [ ] **Gate manual**: num repo git de teste, mandar a Anna editar um arquivo →
+      aprovar → conferir `git log refs/anna/checkpoint` (foto criada, `git status`
+      limpo) → `/rollback` → `/rollback aplicar` devolve o conteúdo.
+- [ ] (pré-existente, segue aberto) **SMOKE AO VIVO** com `SHVIA_API_KEY` — fecha
+      C0 + dogfood C4; e **C5.3** (provider Python no SShvTerm).

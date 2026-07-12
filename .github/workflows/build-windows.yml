@@ -1,0 +1,43 @@
+# Build do `anna.exe` no Windows (runner com toolchain MSVC — onde as deps de
+# TLS com código C/assembly, via rustls/aws-lc-rs, compilam). Serve para: (a)
+# provar que o anna compila no Windows a cada mudança; (b) publicar o anna.exe
+# como artefato pro empacotamento do ShvIA Desktop (ver SHVIA-DESKTOP: a ponte
+# do Modo Code no WebView2 procura o anna.exe no PATH / ao lado do app).
+name: build-windows
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache do cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Sanidade (--version)
+        run: .\target\x86_64-pc-windows-msvc\release\anna.exe --version
+
+      - name: Publica o anna.exe como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: anna-windows-x86_64
+          path: target/x86_64-pc-windows-msvc/release/anna.exe
+          if-no-files-found: error

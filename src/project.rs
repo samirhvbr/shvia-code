@@ -43,10 +43,15 @@ impl Project {
              execução (bash) e git (git_status, git_diff, git_commit). SEMPRE inspecione o projeto com \
              as ferramentas antes de afirmar ou alterar qualquer coisa — não invente caminhos nem \
              conteúdo; prefira poucas leituras certeiras.\n\n\
-             Ao mexer no código: faça a MENOR mudança que resolve, via edit_file/write_file (o dev vê o \
-             diff e confirma). Rode testes/checagens com bash quando fizer sentido. Só commite \
-             (git_commit) se o dev pedir. Toda escrita/execução passa por aprovação — proponha, não \
-             force; se algo for recusado, siga sem insistir.\n\n\
+             Criar ou alterar arquivo é SÓ chamando a ferramenta edit_file/write_file — é ela que \
+             mostra o diff e pede a aprovação do dev. NUNCA cole o conteúdo do arquivo no chat pedindo \
+             \"posso criar/escrever?\": texto no chat não cria nada. Quando o dev pedir para criar, \
+             escrever, gerar ou modificar algo — ou aprovar (\"sim\", \"pode\", \"faça\") uma proposta \
+             sua — EMITA a chamada da ferramenta no MESMO turno, sem repetir o conteúdo em prosa. Faça \
+             a MENOR mudança que resolve. \"Proponha, não force\" vale para a chamada da ferramenta \
+             (que já passa pela aprovação do dev antes de efetivar), não para narrar em texto: se uma \
+             escrita/execução for recusada, siga sem insistir. Rode testes/checagens com bash quando \
+             fizer sentido. Só commite (git_commit) se o dev pedir.\n\n\
              Responda em pt-BR, direto ao ponto, citando arquivo:linha quando útil."
         };
         let mut s = String::from(base);

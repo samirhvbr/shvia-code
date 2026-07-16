@@ -123,6 +123,27 @@
   - ✅ clippy limpo · **14 testes** (2 novos: roundtrip foto→estrago→restore em
     sandbox git; fora-de-git silencioso) · sincronizado o drift `Cargo.toml`
     (0.6.0) → `version.md` (0.8.0).
+- **16/07/2026 — `anna stats`: o dashboard "Wrapped" (0.8.4)** — tela de uso
+  **100% local** ("O que vem a seguir, <você>?"), do pool comparativo com o
+  Claude Code:
+  - `src/stats.rs` — o **cérebro** puro/testável: agrega
+    `~/.shvia-code/sessions/` em sessões, mensagens, tokens, dias ativos,
+    sequência atual/maior, horário de pico, modelo favorito e um heatmap de
+    contribuição; `compute_at(.., hoje)` recebe o "hoje" injetado (os testes
+    independem do fuso da máquina).
+  - Render em duas peças que só desenham o que o cérebro agregou:
+    `src/stats_term.rs` (terminal ANSI — 8 tiles box-drawing + heatmap azul
+    256-cores + a frase do Moby-Dick) e `src/stats_html.rs` (export **offline**,
+    CSS/JS embutidos: abas Visão Geral/Modelos + filtros Todos/30d/7d ao vivo,
+    sem duplicar regra — o Rust pré-computa as 3 faixas, o JS só troca a view).
+  - **`anna stats`** (`--tab`/`--range`/`--html`/`--open`/`--out`) + **`/stats`**
+    no REPL. Doc: [docs/stats.md](../docs/stats.md).
+  - **A sessão passou a PERSISTIR `tokens`/`cost`/`model`** no autosave
+    (`session.rs`, retrocompat via `#[serde(default)]`); só conta das próximas
+    sessões — nas antigas, tokens/modelo aparecem como "—". Dep nova: `chrono`
+    (feature `clock`, datas/hora **local**).
+  - ✅ clippy limpo · **24 testes** (10 novos do stats) · terminal + export HTML
+    rodados de verdade. Drift `Cargo.toml`↔`version.md` sincronizado (0.8.4).
 
 ## 📌 Pendente de produção/distribuição (11/07/2026)
 

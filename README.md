@@ -38,9 +38,17 @@ anna                            # REPL: pergunte, edite, rode, commite (com apro
 anna -p "onde está o bug no cálculo de boleto?"   # uma pergunta, não-interativo
 anna --model "modelo@servidor"  # perfil específico  ·  /model troca no meio
 anna sessions list|resume <id>|clear              # retomar de onde parou
+anna stats                      # dashboard de uso (Wrapped) — 100% local
+anna stats --html --open        # exporta a página HTML e abre no navegador
 ```
 
-Comandos do REPL: `/help` · `/model [perfil]` · `/sessions` · `/tools` · `/clear` · `/exit`.
+Comandos do REPL: `/help` · `/model [perfil]` · `/sessions` · `/stats` · `/tools` · `/clear` · `/exit`.
+
+O **[`anna stats`](docs/stats.md)** é a tela _wrapped_ ("O que vem a seguir,
+&lt;você&gt;?"): sessões, mensagens, tokens, dias ativos, sequência, horário de
+pico, modelo favorito e um heatmap de contribuição — no terminal ou exportado em
+HTML (abas Visão Geral/Modelos + filtros 7d/30d ao vivo). Lê só
+`~/.shvia-code/sessions/`, sem tocar no gateway.
 
 ## Desenho em uma linha
 

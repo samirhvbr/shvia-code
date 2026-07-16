@@ -8,6 +8,9 @@ pub struct Telemetry {
     pub tokens: i64,
     pub cost: f64,
     pub estimated: bool,
+    /// Último modelo reportado pelo gateway (evento `model`) — persistido na
+    /// sessão para o "modelo favorito" do `anna stats`.
+    pub model: Option<String>,
 }
 
 impl Telemetry {

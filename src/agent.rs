@@ -36,6 +36,9 @@ pub async fn run_turn(
         if let Some(u) = &result.usage {
             telemetry.add(u);
         }
+        if let Some(m) = &result.model {
+            telemetry.model = Some(m.clone());
+        }
         if let Some(err) = result.error {
             fe.error(&err);
             return Ok(());

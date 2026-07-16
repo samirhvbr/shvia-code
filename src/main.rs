@@ -20,6 +20,9 @@ mod project;
 mod render;
 mod runner;
 mod session;
+mod stats;
+mod stats_html;
+mod stats_term;
 mod telemetry;
 mod tools;
 mod types;
@@ -32,6 +35,9 @@ use project::Project;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use session::{Session, Store};
+use stats::{Range, Tab};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use telemetry::Telemetry;
 use types::Message;
 use ui::Ui;
@@ -86,6 +92,24 @@ enum Cmd {
         #[command(subcommand)]
         action: SessionAction,
     },
+    /// Dashboard de uso (Wrapped) das suas sessões locais.
+    Stats {
+        /// Aba: overview (padrão) ou models.
+        #[arg(long, default_value = "overview")]
+        tab: String,
+        /// Período: all (padrão), 30d, 7d.
+        #[arg(long, default_value = "all")]
+        range: String,
+        /// Em vez do terminal, gera uma página HTML fiel (abas/filtros ao vivo).
+        #[arg(long)]
+        html: bool,
+        /// Com --html, abre no navegador (xdg-open/open).
+        #[arg(long)]
+        open: bool,
+        /// Caminho do HTML (padrão ~/.shvia-code/stats.html).
+        #[arg(long, value_name = "ARQUIVO")]
+        out: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -139,6 +163,10 @@ fn main() -> anyhow::Result<()> {
             }
             SessionAction::Resume { id } => resume_id = Some(id.clone()),
         },
+        Some(Cmd::Stats { tab, range, html, open, out }) => {
+            run_stats(tab, range, *html, *open, out.clone());
+            return Ok(());
+        }
         None => {}
     }
 
@@ -207,6 +235,7 @@ fn main() -> anyhow::Result<()> {
     // REPL.
     let store = Store::open();
     let mut sess = Session::new();
+    let name = display_name();
 
     let modelo = cfg.profile.clone().unwrap_or_else(|| "modelo default".into());
     ui.banner(&project.header(&modelo, "ShvIA"));
@@ -228,7 +257,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    ui.note("Enter envia · /help ajuda · /model troca modelo · /sessions lista · /clear novo · /exit sai");
+    ui.note("Enter envia · /help ajuda · /model troca modelo · /sessions lista · /stats uso · /clear novo · /exit sai");
 
     let mut rl = DefaultEditor::new()?;
     loop {
@@ -247,6 +276,7 @@ fn main() -> anyhow::Result<()> {
                 if line == "/help" {
                     ui.note("Pergunte sobre o projeto — a Anna lê (read/grep), edita (diff+confirma), roda bash e git com aprovação.");
                     ui.note("/model [perfil] troca o modelo · /sessions lista · /tools ferramentas · /clear novo contexto · /exit");
+                    ui.note("/stats [models] [7d|30d] mostra o dashboard de uso · /stats html gera a página HTML");
                     ui.note("/rollback mostra o que mudou desde o último checkpoint · /rollback aplicar restaura");
                     continue;
                 }
@@ -301,6 +331,33 @@ fn main() -> anyhow::Result<()> {
                     ui.note(&format!("ferramentas: {}", names.join(", ")));
                     continue;
                 }
+                if let Some(rest) = line.strip_prefix("/stats") {
+                    if rest.is_empty() || rest.starts_with(' ') {
+                        // /stats [models] [7d|30d|todos] [html]
+                        let mut tab = Tab::Overview;
+                        let mut range = Range::All;
+                        let mut want_html = false;
+                        for tok in rest.split_whitespace() {
+                            match tok.to_lowercase().as_str() {
+                                "models" | "modelos" | "modelo" => tab = Tab::Models,
+                                "overview" | "geral" | "visao" | "visão" => tab = Tab::Overview,
+                                "html" => want_html = true,
+                                other => range = Range::parse(other),
+                            }
+                        }
+                        let sessions = store.as_ref().map(|st| st.all()).unwrap_or_default();
+                        if want_html {
+                            let doc = stats_html::build(&sessions, &name);
+                            match write_html(&doc, None) {
+                                Ok(p) => ui.note(&format!("dashboard salvo em {} (abra no navegador)", p.display())),
+                                Err(e) => ui.error(&e),
+                            }
+                        } else {
+                            stats_term::render(&stats::compute(&sessions, range), tab, &name);
+                        }
+                        continue;
+                    }
+                }
                 if let Some(rest) = line.strip_prefix("/model") {
                     if rest.is_empty() || rest.starts_with(' ') {
                         let arg = rest.trim();
@@ -331,6 +388,9 @@ fn main() -> anyhow::Result<()> {
                         sess.set_title_from(&first.content);
                     }
                     sess.messages = messages.clone();
+                    sess.tokens = telemetry.tokens;
+                    sess.cost = telemetry.cost;
+                    sess.model = telemetry.model.clone().or_else(|| cfg.profile.clone());
                     st.save(&sess);
                 }
             }
@@ -361,6 +421,77 @@ fn run_json_turn(
     if let Err(e) = rt.block_on(agent::run_turn(cfg, messages, project, fe, tel, runner)) {
         fe.error(&e.to_string());
     }
+}
+
+/// `anna stats` (subcomando): renderiza o dashboard no terminal ou exporta HTML.
+fn run_stats(tab: &str, range: &str, html: bool, open: bool, out: Option<String>) {
+    let name = display_name();
+    let sessions = Store::open().map(|st| st.all()).unwrap_or_default();
+    if html {
+        let doc = stats_html::build(&sessions, &name);
+        match write_html(&doc, out) {
+            Ok(path) => {
+                println!("dashboard salvo em {}", path.display());
+                if open {
+                    open_in_browser(&path);
+                } else {
+                    println!("abra no navegador (ou rode com --open)");
+                }
+            }
+            Err(e) => eprintln!("{e}"),
+        }
+    } else {
+        let st = stats::compute(&sessions, Range::parse(range));
+        stats_term::render(&st, Tab::parse(tab), &name);
+    }
+}
+
+/// Escreve o HTML no caminho dado (ou o padrão ~/.shvia-code/stats.html) e
+/// devolve o caminho gravado.
+fn write_html(doc: &str, out: Option<String>) -> Result<PathBuf, String> {
+    let path = match out {
+        Some(p) => PathBuf::from(p),
+        None => {
+            default_html_path().ok_or_else(|| "não consegui resolver ~/.shvia-code".to_string())?
+        }
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&path, doc).map_err(|e| format!("erro ao escrever {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+fn default_html_path() -> Option<PathBuf> {
+    let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
+    Some(home.join(".shvia-code").join("stats.html"))
+}
+
+/// Nome de exibição do cabeçalho ("…, Samir?"): 1ª letra do usuário do SO em
+/// maiúscula; "dev" se não der pra resolver.
+fn display_name() -> String {
+    let raw = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return "dev".into();
+    }
+    let mut chars = raw.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => "dev".into(),
+    }
+}
+
+fn open_in_browser(path: &Path) {
+    let p = path.to_string_lossy().to_string();
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open").arg(&p).status();
+    #[cfg(target_os = "linux")]
+    let _ = Command::new("xdg-open").arg(&p).status();
+    #[cfg(target_os = "windows")]
+    let _ = Command::new("cmd").args(["/C", "start", "", &p]).status();
 }
 
 fn print_config(cfg: &Config) {

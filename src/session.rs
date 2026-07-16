@@ -13,6 +13,17 @@ pub struct Session {
     pub title: String,
     #[serde(default)]
     pub messages: Vec<Message>,
+    /// Tokens acumulados da sessão (do `usage`; 0 nas sessões antigas ao
+    /// dashboard — nunca foram registrados). Alimenta o `anna stats`.
+    #[serde(default)]
+    pub tokens: i64,
+    /// Custo acumulado (US$; real ou estimado). 0 quando desconhecido.
+    #[serde(default)]
+    pub cost: f64,
+    /// Modelo/perfil efetivo da sessão (o `model` reportado pelo gateway, ou o
+    /// perfil escolhido). `None` nas sessões antigas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl Session {
@@ -21,7 +32,7 @@ impl Session {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs().to_string())
             .unwrap_or_else(|_| "0".into());
-        Self { id, title: String::new(), messages: vec![] }
+        Self { id, title: String::new(), messages: vec![], tokens: 0, cost: 0.0, model: None }
     }
 
     pub fn set_title_from(&mut self, first_user: &str) {
@@ -75,6 +86,25 @@ impl Store {
     pub fn load(&self, id: &str) -> Option<Session> {
         let txt = std::fs::read_to_string(self.dir.join(format!("{id}.json"))).ok()?;
         serde_json::from_str(&txt).ok()
+    }
+
+    /// Todas as sessões, na íntegra (para o `anna stats`). Ignora arquivos
+    /// ilegíveis/corrompidos em silêncio — o dashboard nunca quebra por um
+    /// arquivo ruim.
+    pub fn all(&self) -> Vec<Session> {
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&self.dir) {
+            for e in rd.flatten() {
+                if e.path().extension().and_then(|x| x.to_str()) == Some("json") {
+                    if let Ok(txt) = std::fs::read_to_string(e.path()) {
+                        if let Ok(s) = serde_json::from_str::<Session>(&txt) {
+                            out.push(s);
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     pub fn clear(&self) -> usize {

@@ -91,20 +91,35 @@ impl Frontend for JsonSink {
             "policy": policy.as_str(),
             "preview": preview_json(preview),
         }));
-        // Bloqueia esperando UMA linha de decisão do host no stdin:
+        // Bloqueia até chegar a decisão do host no stdin:
         //   {"decision":"approve"|"always"|"reject"}
-        let mut line = String::new();
-        if io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
-            return false; // stdin fechado → nega (seguro)
-        }
-        let v: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
-        match v.get("decision").and_then(|d| d.as_str()).unwrap_or("reject") {
-            "approve" => true,
-            "always" if policy == Policy::Confirm => {
-                self.allowed.insert(scope.to_string());
-                true
+        // Robustez: linhas em branco ou sem "decision" (ex.: um {"type":"user"} que
+        // chegou fora de hora) são IGNORADAS em vez de virarem um reject silencioso;
+        // um {"type":"exit"} durante o gate cancela (nega, seguro); EOF → nega.
+        loop {
+            let mut line = String::new();
+            if io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+                return false; // stdin fechado → nega (seguro)
             }
-            _ => false,
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let v: Value = serde_json::from_str(t).unwrap_or(Value::Null);
+            if let Some(decision) = v.get("decision").and_then(|d| d.as_str()) {
+                return match decision {
+                    "approve" => true,
+                    "always" if policy == Policy::Confirm => {
+                        self.allowed.insert(scope.to_string());
+                        true
+                    }
+                    _ => false,
+                };
+            }
+            if v.get("type").and_then(|x| x.as_str()) == Some("exit") {
+                return false; // cancela o gate; o motor encerra logo em seguida
+            }
+            // qualquer outra linha durante um gate pendente: ignora e segue esperando
         }
     }
 }

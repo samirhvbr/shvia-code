@@ -31,13 +31,21 @@ pub fn resolve_new(root: &Path, rel: &str) -> Option<PathBuf> {
 /// Caminho na denylist de segredos? Vale mesmo com override — o override é
 /// decisão do dev na hora (SECURITY §2.3), nunca do modelo.
 pub fn denied(rel: &str) -> bool {
-    let base = Path::new(rel).file_name().and_then(|s| s.to_str()).unwrap_or(rel);
-    let low = rel.to_lowercase();
+    // Case-insensitive: em FS case-insensitive (macOS/Windows) `.ENV`/`KEY.PEM`
+    // apontam pro MESMO arquivo que `.env`/`key.pem` — comparar em minúsculas.
+    let base_raw = Path::new(rel).file_name().and_then(|s| s.to_str()).unwrap_or(rel);
+    let base = base_raw.to_lowercase();
+    let low = rel.to_lowercase().replace('\\', "/");
+    // Nunca escrever em .git/ — um hook (.git/hooks/*) ou .git/config vira execução
+    // de código arbitrária na máquina do dev quando o git roda.
+    if base == ".git" || low == ".git" || low.starts_with(".git/") || low.contains("/.git/") || low.ends_with("/.git") {
+        return true;
+    }
     base == ".env"
         // .env.example é template público — não é segredo.
         || (base.starts_with(".env.") && base != ".env.example")
         || matches!(
-            Path::new(base).extension().and_then(|s| s.to_str()),
+            Path::new(base.as_str()).extension().and_then(|s| s.to_str()),
             Some("pem") | Some("key") | Some("p8") | Some("p12") | Some("pfx")
         )
         || base.starts_with("id_rsa")

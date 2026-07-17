@@ -233,6 +233,12 @@ fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, i
     if guard::denied(path) {
         return format!("RECUSADO: '{path}' está na denylist de segredos (SECURITY §2.3).");
     }
+    // old_string vazio casa em toda fronteira de char (matches("") = len+1): com
+    // replace_all destruiria o arquivo (insere new entre cada char); sem, faria um
+    // prepend silencioso. Para criar/inserir, a ferramenta certa é write_file.
+    if old.is_empty() {
+        return "ERRO: old_string vazio não é permitido — use write_file para criar ou gerar o conteúdo.".into();
+    }
     let Some(full) = guard::resolve(root, path) else {
         return format!("ERRO: '{path}' inexistente ou fora do projeto.");
     };
@@ -265,11 +271,15 @@ fn write_file(root: &Path, path: &str, content: &str, id: &str, fe: &mut dyn Fro
     let Some(full) = guard::resolve_new(root, path) else {
         return format!("ERRO: pasta-pai de '{path}' inexistente ou fora do projeto.");
     };
+    let existed = full.exists();
     let old = std::fs::read_to_string(&full).unwrap_or_default();
-    if old == content {
+    // "Sem mudanças" só vale se o arquivo JÁ existe com esse conteúdo. Sem o
+    // `existed`, criar um arquivo novo vazio (content=="") batia com o
+    // unwrap_or_default() de um arquivo inexistente ("") e retornava "sem mudanças"
+    // sem nunca gravar — o arquivo nunca era criado (erro silencioso).
+    if existed && old == content {
         return format!("ok — '{path}' já tem esse conteúdo (sem mudanças).");
     }
-    let existed = full.exists();
     let preview = Preview::Diff { path, old: old.as_str(), new: content };
     if !fe.approve(Policy::Confirm, "write_file", id, &preview) {
         return "RECUSADO: escrita cancelada pelo usuário.".into();

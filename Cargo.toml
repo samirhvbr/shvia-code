@@ -1,7 +1,7 @@
 [package]
 name = "anna"
 # Mantida em sincronia com version.md (fonte da verdade). O build-local.sh checa.
-version = "0.8.5"
+version = "0.8.7"
 edition = "2021"
 description = "Anna — CLI agêntico de código da Blue3, sobre o gateway do ShvIA (SHVIA-CODE)"
 authors = ["Samir Hanna Verza <samirhv@me.com>"]
@@ -29,3 +29,11 @@ directories = "5"       # ~/.config, ~/.local/share corretos por SO
 toml = "0.8"            # config file
 similar = "2"           # diff unificado (preview de edit_file/write_file — C2)
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }  # datas/hora LOCAL do dashboard (anna stats)
+
+# Espelha o perfil do SHVIA-DESKTOP: binário menor e mais rápido pro release
+# distribuído (o dia a dia de dev usa `cargo build` normal, perfil dev intacto).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3

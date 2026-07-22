@@ -50,6 +50,19 @@ impl Config {
             .or(file.url)
             .unwrap_or_else(|| DEFAULT_URL.to_string());
 
+        // HTTPS obrigatório (SECURITY_GUIDELINES §2.2): a API key viaja em
+        // header a cada request. Exceção única: loopback, para dev local
+        // (`php artisan serve` / gateway na própria máquina).
+        let is_loopback = url.starts_with("http://localhost")
+            || url.starts_with("http://127.")
+            || url.starts_with("http://[::1]");
+        if !url.starts_with("https://") && !is_loopback {
+            anyhow::bail!(
+                "SHVIA_URL insegura: {url} — use https:// (a API key viaja em header). \
+                 Exceção permitida: http://localhost|127.x|[::1] para dev local."
+            );
+        }
+
         let profile = std::env::var("SHVIA_PROFILE").ok().or(file.profile);
         let effort = std::env::var("SHVIA_EFFORT").ok().filter(|e| !e.is_empty()).or(file.effort);
 

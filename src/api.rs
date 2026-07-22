@@ -6,6 +6,15 @@ use crate::config::Config;
 use crate::types::{ChatRequest, Event, Message, RawEvent, ToolCall, ToolDef, Usage};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
+use std::sync::OnceLock;
+
+/// Client HTTP compartilhado do processo: reusa pool de conexões e sessão TLS
+/// entre voltas (antes: `Client::new()` a cada chamada = handshake TCP+TLS
+/// por turno contra o gateway).
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
 
 /// Agregado de uma volta (o `on_event` já cuidou do render ao vivo).
 #[derive(Default)]
@@ -35,7 +44,7 @@ pub async fn code_chat(
         profile_name: cfg.profile.clone(),
         effort: cfg.effort.clone(),
     };
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{}/api/v1/code/chat", cfg.url.trim_end_matches('/')))
         .header("Accept", "text/event-stream")
         .header("X-API-Key", api_key)

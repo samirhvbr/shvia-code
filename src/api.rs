@@ -63,7 +63,7 @@ pub async fn code_chat(
         });
         let detail = match status.as_u16() {
             401 => "não autorizado (401): chave ausente, inválida ou expirada. \
-                    Gere em ia.blue3.com.br → Conta → \"Gerar Chave de API\" e exporte \
+                    Gere em ai.shvia.org → Conta → \"Gerar Chave de API\" e exporte \
                     SHVIA_API_KEY (formato shvia_usr_…) — a APP_KEY base64: NÃO serve."
                 .to_string(),
             403 => format!(

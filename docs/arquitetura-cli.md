@@ -111,7 +111,7 @@ always), executa e devolve o `content` (sucesso/`ERRO:`/`RECUSADO:`).
 
 **`~/.config/shvia-code/config.toml`** (0600):
 ```toml
-url        = "https://ia.blue3.com.br"
+url        = "https://ai.shvia.org"
 profile    = "qwen-coder@shvia1"   # opcional; default do usuário se ausente
 # api_key NÃO fica aqui em texto se der pra usar keychain; fallback: campo 0600.
 # Precedência: env SHVIA_API_KEY > config. Nunca em argumento de linha.

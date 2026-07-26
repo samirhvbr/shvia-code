@@ -1,7 +1,7 @@
 # SHVIA-CODE
 
 CLI agêntico de código da Blue3 — comando **`anna`** (Rust). A experiência do
-Claude Code, movida pelo **gateway do ShvIA** (`ia.blue3.com.br`): a Anna lê
+Claude Code, movida pelo **gateway do ShvIA** (`ai.shvia.org`): a Anna lê
 arquivos, propõe diffs, edita, roda comandos e commita — **com aprovação** — no
 projeto em que o dev está, usando qualquer perfil de modelo do ShvIA (on-prem
 ou nuvem BYOK).

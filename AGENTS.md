@@ -22,7 +22,7 @@ git pull          # já está pré-autorizado (allow)
 ## O que é este repo
 
 **CLI agêntico de código** da Blue3 — comando **`anna`** (Rust): a experiência
-do Claude Code movida pelo **gateway do ShvIA** (`ia.blue3.com.br`). O loop
+do Claude Code movida pelo **gateway do ShvIA** (`ai.shvia.org`). O loop
 agêntico roda **no cliente** (tools executam na máquina do dev, com gates de
 aprovação); o servidor só infere — auditoria/quotas/LGPD/custo herdados.
 Irmão de `SHVIA-WEB` (servidor Laravel), `SHVIA-DESKTOP` e `SHVIA-MOBILE`.
@@ -64,5 +64,5 @@ Proibido `feat:`/`fix:`/`chore:` e mensagens vagas.
 
 - Versão: `version.md` · Escopo/fases: [.continue/escopo-projeto.md](.continue/escopo-projeto.md)
 - Decisões: [docs/decisoes.md](docs/decisoes.md)
-- Servidor/gateway: `~/x/SHVIA-WEB` (`https://ia.blue3.com.br`)
+- Servidor/gateway: `~/x/SHVIA-WEB` (`https://ai.shvia.org`)
 - Padrão de aprovação de comandos: SShvTerm (aba Agente)

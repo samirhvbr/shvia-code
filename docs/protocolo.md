@@ -10,7 +10,7 @@
 ## 1. Chamada
 
 ```
-POST {SHVIA_URL}/api/v1/code/chat          # SHVIA_URL default = https://ia.blue3.com.br
+POST {SHVIA_URL}/api/v1/code/chat          # SHVIA_URL default = https://ai.shvia.org
 Content-Type: application/json
 Accept: text/event-stream
 X-API-Key: <chave do ShvIA>                # ou Authorization: Bearer <token>

@@ -44,7 +44,7 @@
 5. **Sessões locais** em `~/.shvia-code/sessions/` com **0600/0700**, fora de
    qualquer sync de nuvem; `anna sessions clear` apaga tudo. Transcripts nunca
    sobem ao servidor no v1 (D7). (A5)
-6. **Transporte**: HTTPS obrigatório; host default `ia.blue3.com.br`; trocar de
+6. **Transporte**: HTTPS obrigatório; host default `ai.shvia.org`; trocar de
    host exige edição manual da config (nunca por flag do modelo/tool). Erro de
    certificado = aborta, sem opção interativa de "ignorar". (A8)
 7. **Limites no loop**: teto de iterações de tool por turno (default 25) e teto

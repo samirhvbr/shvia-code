@@ -64,5 +64,5 @@ Proibido `feat:`/`fix:`/`chore:` e mensagens vagas.
 
 - Versão: `version.md` · Escopo/fases: [.continue/escopo-projeto.md](.continue/escopo-projeto.md)
 - Decisões: [docs/decisoes.md](docs/decisoes.md)
-- Servidor/gateway: `~/x/SHVIA-WEB` (`https://ai.shvia.org`)
+- Servidor/gateway: `~/x/SHVIA/SHVIA-WEB` (`https://ai.shvia.org`)
 - Padrão de aprovação de comandos: SShvTerm (aba Agente)

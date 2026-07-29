@@ -43,7 +43,7 @@ Formato ADR. Não relitigar direção já decidida dentro de um how-to — linka
   codado** (0.5.0); a escolha do **modelo de execução** (A vs B) está **Proposta**,
   aguardando OK antes de tocar no `SSHVTERM-DESKTOP`.
 - **Contexto:** o C5 quer "o mesmo motor do `anna` movendo a aba Agente do
-  SShvTerm". Ao mapear o `~/x/SSHVTERM-DESKTOP` (branch `claude/ai-agent-vm-access-dkzii2`)
+  SShvTerm". Ao mapear o `~/x/SSHVTERM/SSHVTERM-DESKTOP` (branch `claude/ai-agent-vm-access-dkzii2`)
   descobrimos que a aba Agente **já é um agente completo**, e **em Python** (não
   Rust): um **sidecar** (WebSocket JSON-RPC) com providers (Anthropic/OpenAI/SHVIA),
   **engine de política** allow/ask/deny, detecção de destrutivo, **redação de

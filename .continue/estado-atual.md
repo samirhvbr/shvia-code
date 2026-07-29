@@ -43,7 +43,7 @@
     ```bash
     ./build-local.sh                      # gera target/release/anna
     cd ~/x/QUALQUER-REPO
-    SHVIA_API_KEY=<chave> ~/x/SHVIA-CODE/target/release/anna
+    SHVIA_API_KEY=<chave> ~/x/SHVIA/SHVIA-CODE/target/release/anna
     > explique este projeto / onde está o bug em X?
     ```
     (o `spikes/c0-gateway.php` já provou o protocolo; isto prova o CLI Rust.)
@@ -89,7 +89,7 @@
   - Protocolo: [docs/embedding.md](../docs/embedding.md). Decisão: [ADR-002](../docs/decisoes.md).
   - ✅ clippy `-D warnings` limpo · **10 testes** verdes (tests de escrita agora usam
     `Ui` como Frontend) · smoke offline do `--json` ok (evento de erro NDJSON válido).
-- **Achado que reformata o C5:** a aba Agente do **SShvTerm** (`~/x/SSHVTERM-DESKTOP`,
+- **Achado que reformata o C5:** a aba Agente do **SShvTerm** (`~/x/SSHVTERM/SSHVTERM-DESKTOP`,
   branch `claude/ai-agent-vm-access-dkzii2`) **já é um agente completo, em Python**
   (sidecar WS-RPC): providers, política allow/ask/deny, redação de segredos, diálogo
   de aprovação, e **execução no terminal visível / host SSH** + auditoria. Seam:
@@ -105,7 +105,7 @@
     `gate_request` — quem aprova é o host. Doc: embedding.md §Execução.
   - ✅ clippy limpo · 10 testes verdes · `--tools host` parseia e smoke NDJSON ok.
     (O loop host-exec completo só se prova com o gateway + o lado Python.)
-- **Próximo: C5.3 — o provider no sidecar Python do SShvTerm** (`~/x/SSHVTERM-DESKTOP`,
+- **Próximo: C5.3 — o provider no sidecar Python do SShvTerm** (`~/x/SSHVTERM/SSHVTERM-DESKTOP`,
   `sidecar/agent/providers/external.py`): spawna `anna --json --tools host`, relaia
   os eventos NDJSON pro loop `_run_and_respond` que já tem (aprovação/política/PTY/SSH/
   auditoria). Mexe na branch ativa `claude/ai-agent-vm-access-dkzii2` → trabalho combinado.

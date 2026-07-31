@@ -353,7 +353,10 @@ const ALLOWLIST: &[&str] = &[
     "cargo test", "cargo build", "php -l", "phpunit", "pytest", "make test",
 ];
 
-fn is_simple_allowlisted(cmd: &str) -> bool {
+/// Público no crate porque o gate determinístico do orquestrador só roda o que
+/// o `bash` já aprovaria sozinho (`Policy::Auto`) — o gate não pode virar porta
+/// dos fundos pra executar comando sem o dev ver.
+pub(crate) fn is_simple_allowlisted(cmd: &str) -> bool {
     let c = cmd.trim();
     // Sem metacaracteres que encadeiam/redirecionam/substituem — senão pode
     // esconder algo destrutivo mesmo começando com um comando "seguro".

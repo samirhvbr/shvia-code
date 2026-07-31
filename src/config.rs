@@ -4,6 +4,7 @@
 //! **A API key NUNCA vem de argumento de linha** (aparece no `ps`) — só de
 //! `SHVIA_API_KEY` ou do arquivo de config 0600 (SECURITY §2.4).
 
+use crate::papel::{Elenco, Papel};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -24,6 +25,8 @@ struct FileConfig {
     profile: Option<String>,
     api_key: Option<String>,
     effort: Option<String>,
+    elenco: Option<Elenco>,
+    verificacao: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +36,12 @@ pub struct Config {
     pub api_key: Option<String>,
     /// Esforço de raciocínio (low|medium|high|xhigh|max). O gateway valida.
     pub effort: Option<String>,
+    /// Tabela papel → (perfil, esforço) do orquestrador. Vazia = todos os papéis
+    /// no perfil global (o pipeline roda, mas avisa que não é blend nenhum).
+    pub elenco: Elenco,
+    /// Comandos do gate determinístico do orquestrador. `None` = detecta pela
+    /// stack (Cargo.toml → cargo clippy/test etc.).
+    pub verificacao: Option<Vec<String>>,
 }
 
 /// `true` se `url` puder receber a API key: https, ou http em LOOPBACK de verdade.
@@ -112,7 +121,116 @@ impl Config {
             .filter(|k| !k.is_empty())
             .or(file.api_key);
 
-        Ok(Self { url, profile, api_key, effort })
+        let elenco = file.elenco.unwrap_or_default();
+        let verificacao = file.verificacao;
+
+        Ok(Self { url, profile, api_key, effort, elenco, verificacao })
+    }
+
+    /// `Config` derivada para um papel do orquestrador: troca só perfil/esforço,
+    /// mantém url e chave.
+    ///
+    /// Precedência do esforço: elenco do papel > `effort` global (escolha
+    /// EXPLÍCITA do dev, seja por flag, env ou config) > padrão do papel. Sem
+    /// essa ordem, quem rodou `anna --effort low` de propósito veria o arquiteto
+    /// subir pra `xhigh` sozinho.
+    pub fn para(&self, papel: Papel) -> Config {
+        let cfg = self.elenco.get(papel);
+        let profile = cfg
+            .and_then(|c| c.profile.clone())
+            .or_else(|| self.profile.clone());
+        let effort = cfg
+            .and_then(|c| c.effort.clone())
+            .or_else(|| self.effort.clone())
+            .or_else(|| Some(papel.esforco_padrao().to_string()));
+        Config { profile, effort, ..self.clone() }
+    }
+
+    /// Uma linha por papel, pro `anna config` — a tabela de roteamento tem que
+    /// ser visível, é o ponto de ser estática.
+    pub fn elenco_resolvido(&self) -> Vec<(&'static str, String, String)> {
+        [Papel::Arquiteto, Papel::Executor, Papel::Revisor]
+            .into_iter()
+            .map(|p| {
+                let c = self.para(p);
+                (
+                    p.chave(),
+                    c.profile.unwrap_or_else(|| "(default do usuário)".into()),
+                    c.effort.unwrap_or_else(|| "(default do servidor)".into()),
+                )
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests_elenco {
+    use super::*;
+    use crate::papel::PapelCfg;
+
+    fn base() -> Config {
+        Config {
+            url: "https://ai.shvia.org".into(),
+            profile: Some("global".into()),
+            api_key: None,
+            effort: None,
+            elenco: Elenco::default(),
+            verificacao: None,
+        }
+    }
+
+    #[test]
+    fn papel_sem_elenco_cai_no_perfil_global_com_esforco_padrao() {
+        let c = base().para(Papel::Arquiteto);
+        assert_eq!(c.profile.as_deref(), Some("global"));
+        assert_eq!(c.effort.as_deref(), Some("xhigh"), "arquiteto pensa por padrão");
+        assert_eq!(base().para(Papel::Executor).effort.as_deref(), Some("high"));
+    }
+
+    /// O motivo da precedência ser (elenco > global > padrão do papel): quem
+    /// rodou `anna --effort low` de propósito não pode ver o arquiteto subir
+    /// pra `xhigh` sozinho e triplicar a conta.
+    #[test]
+    fn effort_explicito_do_dev_ganha_do_padrao_do_papel() {
+        let mut c = base();
+        c.effort = Some("low".into());
+        assert_eq!(c.para(Papel::Arquiteto).effort.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn elenco_ganha_do_global_e_nao_vaza_entre_papeis() {
+        let mut c = base();
+        c.effort = Some("low".into());
+        c.elenco.arquiteto =
+            Some(PapelCfg { profile: Some("opus5@shvia".into()), effort: Some("max".into()) });
+        let a = c.para(Papel::Arquiteto);
+        assert_eq!(a.profile.as_deref(), Some("opus5@shvia"));
+        assert_eq!(a.effort.as_deref(), Some("max"));
+        let e = c.para(Papel::Executor);
+        assert_eq!(e.profile.as_deref(), Some("global"), "executor não herda o do arquiteto");
+        assert_eq!(e.effort.as_deref(), Some("low"));
+    }
+
+    /// Trava a superfície de config documentada no README.
+    #[test]
+    fn toml_do_elenco_parseia() {
+        let raw = r#"
+profile = "global"
+verificacao = ["cargo test"]
+
+[elenco.arquiteto]
+profile = "opus5@shvia"
+effort  = "xhigh"
+
+[elenco.executor]
+profile = "sonnet5@shvia"
+"#;
+        let f: FileConfig = toml::from_str(raw).expect("config.toml do elenco deve parsear");
+        let e = f.elenco.expect("elenco presente");
+        assert_eq!(e.arquiteto.unwrap().effort.as_deref(), Some("xhigh"));
+        assert!(e.executor.unwrap().effort.is_none(), "papel pode fixar só o perfil");
+        assert!(e.revisor.is_none(), "papel omitido é opcional");
+        assert_eq!(f.verificacao.unwrap(), vec!["cargo test".to_string()]);
     }
 }
 

@@ -144,6 +144,33 @@
     (feature `clock`, datas/hora **local**).
   - ✅ clippy limpo · **24 testes** (10 novos do stats) · terminal + export HTML
     rodados de verdade. Drift `Cargo.toml`↔`version.md` sincronizado (0.8.4).
+- **31/07/2026 — pipeline de papéis `/plano` (0.9.0):** a tarefa deixa de ser um
+  modelo fazendo tudo e vira **arquiteto → o dev aprova o plano → executor →
+  revisão**. Decisão e rationale: [ADR-003](../docs/decisoes.md) · desenho e
+  configuração: [docs/orquestrador.md](../docs/orquestrador.md).
+  - **`src/plano.rs`** — os contratos (`Plano`/`Veredito`) com schema validado e
+    extrator de JSON tolerante a cerca/prosa (contador de profundidade ciente de
+    string: `"troque o { por ["` quebrava a busca ingênua pelo último `}`). É a
+    peça que sustenta o resto — os papéis não compartilham contexto, compartilham
+    artefato.
+  - **`src/papel.rs`** — o **elenco**: tabela `papel → (perfil, esforço)` no
+    `config.toml`, **estática de propósito** (roteador-modelo seria mais uma
+    chamada paga, erraria e não daria pra auditar). Precedência do esforço:
+    elenco > `effort` global > padrão do papel.
+  - **`src/orquestrador.rs`** — o pipeline e os dois gates de revisão: gate 0
+    determinístico (clippy/testes, **grátis, vem primeiro** — rodar modelo em
+    diff que não compila é pagar pra ouvir o compilador) e gate 1 revisor-modelo,
+    que julga **contra o plano** (os `aceite` são a régua; pergunta aberta não
+    converge). Freios contra ping-pong: teto de 2 voltas + dedup por achado.
+  - **`runner::SomenteLeitura`** — arquiteto e revisor não escrevem **por
+    construção**: filtra as defs e recusa a chamada. Não é instrução de prompt.
+  - `agent::run_turn` passa a devolver o texto final do turno (o REPL descarta;
+    as fases que produzem artefato precisam). `Project::bloco_contexto()`
+    extraído do system prompt pros papéis reusarem.
+  - ✅ clippy limpo · **43 testes** (9 novos: contratos, só-leitura, precedência
+    do elenco, e um alarme travando o gate 0 na allowlist do `bash`). Drift
+    `Cargo.toml` (0.8.8) ↔ `version.md` (0.8.10) sincronizado em 0.9.0.
+  - ⚠️ **Nunca rodou contra um modelo** — só contra os testes de contrato.
 
 ## 📌 Pendente de produção/distribuição (11/07/2026)
 
@@ -158,3 +185,10 @@ O anna é CLI **client-side** — "produção" = binário novo nos lugares que o
       limpo) → `/rollback` → `/rollback aplicar` devolve o conteúdo.
 - [ ] (pré-existente, segue aberto) **SMOKE AO VIVO** com `SHVIA_API_KEY` — fecha
       C0 + dogfood C4; e **C5.3** (provider Python no SShvTerm).
+- [ ] **`/plano` ao vivo (0.9.0)**: configurar o `[elenco]` com perfis reais e
+      rodar numa tarefa pequena de verdade. O que só se mede rodando: se o
+      arquiteto escreve `o_que` autossuficiente, se os `aceite` são régua o
+      bastante pro loop fechar, e se o revisor acha o que deve sem virar crítica
+      aberta. **O prompt do revisor deve ser reescrito depois de ~10–15 planos
+      reais** — o veredito bom sai dos erros que o executor comete NESTE código,
+      não dos que dava pra imaginar antes.

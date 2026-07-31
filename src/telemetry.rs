@@ -24,6 +24,18 @@ impl Telemetry {
         }
     }
 
+    /// Soma outro acumulador. O orquestrador mede cada papel em separado (é o
+    /// número que responde "quanto custou o arquiteto?") e devolve o total pro
+    /// turno do REPL.
+    pub fn absorver(&mut self, o: &Telemetry) {
+        self.tokens += o.tokens;
+        self.cost += o.cost;
+        self.estimated |= o.estimated;
+        if self.model.is_none() {
+            self.model = o.model.clone();
+        }
+    }
+
     pub fn footer(&self) -> String {
         let sign = if self.estimated { "≈" } else { "" };
         format!("⏱ {} tokens · custo {sign}US$ {:.6}", self.tokens, self.cost)

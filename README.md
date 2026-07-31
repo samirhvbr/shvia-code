@@ -14,9 +14,13 @@ ou nuvem BYOK).
 
 **C1–C3 no código (0.3.x)** — o `anna` lê, edita (diff+confirmação), roda `bash`
 (com gates), commita, retoma **sessões**, troca de modelo (`/model`) e responde
-em markdown. `cargo clippy -D warnings` limpo, 10 testes verdes. **Falta só o
+em markdown. Em 0.9.0 entra o **pipeline de papéis** (`/plano` —
+[orquestrador.md](docs/orquestrador.md)): arquiteto → você aprova → executor →
+revisão. `cargo clippy -D warnings` limpo, 43 testes verdes. **Falta só o
 smoke ao vivo** (precisa de `SHVIA_API_KEY` + gateway 2.16.0) pra provar o loop
-de ponta a ponta contra um modelo real.
+de ponta a ponta contra um modelo real — inclusive o `/plano`, que até aqui só
+foi exercitado nos testes de contrato (parse/validação/só-leitura), nunca contra
+um modelo.
 
 ## Instalar
 
@@ -42,7 +46,15 @@ anna stats                      # dashboard de uso (Wrapped) — 100% local
 anna stats --html --open        # exporta a página HTML e abre no navegador
 ```
 
-Comandos do REPL: `/help` · `/model [perfil]` · `/sessions` · `/stats` · `/tools` · `/clear` · `/exit`.
+Comandos do REPL: `/help` · `/plano <pedido>` · `/model [perfil]` · `/sessions` · `/stats` · `/tools` · `/clear` · `/exit`.
+
+O **[`/plano`](docs/orquestrador.md)** roda a tarefa como pipeline de papéis em
+vez de um modelo fazendo tudo: o **arquiteto** (só leitura) propõe um plano
+arquivo-a-arquivo, **você aprova ou não**, o **executor** aplica passo a passo
+(com os gates de diff de sempre) e a revisão fecha — primeiro clippy/testes, e só
+depois um **revisor** que julga o diff contra o plano. Cada papel tem perfil e
+esforço próprios (`[elenco]` no `config.toml`, `anna config` mostra a tabela) e o
+custo sai discriminado por papel no fim.
 
 O **[`anna stats`](docs/stats.md)** é a tela _wrapped_ ("O que vem a seguir,
 &lt;você&gt;?"): sessões, mensagens, tokens, dias ativos, sequência, horário de

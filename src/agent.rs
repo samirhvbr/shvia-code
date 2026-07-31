@@ -16,6 +16,11 @@ use anyhow::Result;
 
 const MAX_ROUNDS: usize = 25;
 
+/// Devolve o TEXTO final do turno (o que o modelo respondeu sem pedir mais
+/// ferramenta). O REPL descarta; o orquestrador precisa — é dali que sai o
+/// artefato JSON das fases arquiteto/revisor. Erro do gateway devolve texto
+/// vazio (o `fe.error` já reportou), o que a fase que espera artefato trata
+/// como "não achei JSON na resposta".
 pub async fn run_turn(
     cfg: &Config,
     messages: &mut Vec<Message>,
@@ -23,11 +28,12 @@ pub async fn run_turn(
     fe: &mut dyn Frontend,
     telemetry: &mut Telemetry,
     runner: &mut dyn ToolRunner,
-) -> Result<()> {
+) -> Result<String> {
     // Captura opcional (ai-memory): o prompt que abre o turno. No-op sem env.
     if let Some(last) = messages.iter().rev().find(|m| m.role == "user") {
         memory::user_prompt(&last.content);
     }
+    let mut ultimo_texto = String::new();
     for _round in 0..MAX_ROUNDS {
         let result =
             api::code_chat(cfg, messages, runner.tool_defs(), &mut |ev| fe.on_event(ev)).await?;
@@ -41,11 +47,12 @@ pub async fn run_turn(
         }
         if let Some(err) = result.error {
             fe.error(&err);
-            return Ok(());
+            return Ok(String::new());
         }
+        ultimo_texto = result.text.clone();
         if result.tool_calls.is_empty() {
             fe.turn_end(telemetry);
-            return Ok(());
+            return Ok(ultimo_texto);
         }
 
         // Modelo pediu ferramentas → o `runner` decide onde executam (local =
@@ -60,5 +67,5 @@ pub async fn run_turn(
 
     fe.warn("teto de voltas atingido — refine a pergunta.");
     fe.turn_end(telemetry);
-    Ok(())
+    Ok(ultimo_texto)
 }

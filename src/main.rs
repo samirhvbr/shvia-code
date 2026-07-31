@@ -16,6 +16,9 @@ mod gate;
 mod guard;
 mod json;
 mod memory;
+mod orquestrador;
+mod papel;
+mod plano;
 mod project;
 mod render;
 mod runner;
@@ -257,7 +260,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    ui.note("Enter envia · /help ajuda · /model troca modelo · /sessions lista · /stats uso · /clear novo · /exit sai");
+    ui.note("Enter envia · /help ajuda · /plano pipeline · /model troca modelo · /sessions lista · /stats uso · /clear novo · /exit sai");
 
     let mut rl = DefaultEditor::new()?;
     loop {
@@ -275,6 +278,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 if line == "/help" {
                     ui.note("Pergunte sobre o projeto — a Anna lê (read/grep), edita (diff+confirma), roda bash e git com aprovação.");
+                    ui.note("/plano <pedido> roda o pipeline: arquiteto planeja → você aprova → executor aplica → revisão fecha");
                     ui.note("/model [perfil] troca o modelo · /sessions lista · /tools ferramentas · /clear novo contexto · /exit");
                     ui.note("/stats [models] [7d|30d] mostra o dashboard de uso · /stats html gera a página HTML");
                     ui.note("/rollback mostra o que mudou desde o último checkpoint · /rollback aplicar restaura");
@@ -369,6 +373,23 @@ fn main() -> anyhow::Result<()> {
                         } else {
                             cfg.profile = Some(arg.to_string());
                             ui.note(&format!("modelo → {arg}"));
+                        }
+                        continue;
+                    }
+                }
+
+                // Pipeline de papéis (docs/orquestrador.md): o arquiteto planeja
+                // em só-leitura, VOCÊ aprova o plano, o executor aplica passo a
+                // passo e a revisão (clippy/testes + revisor-modelo) fecha.
+                if let Some(rest) = line.strip_prefix("/plano") {
+                    if rest.is_empty() || rest.starts_with(' ') {
+                        let pedido = rest.trim().to_string();
+                        if pedido.is_empty() {
+                            ui.note("/plano <o que você quer> — arquiteto → você aprova → executor → revisão");
+                        } else if let Err(e) = rt.block_on(orquestrador::executar(
+                            &cfg, &project, &mut ui, &mut telemetry, &pedido,
+                        )) {
+                            ui.error(&e.to_string());
                         }
                         continue;
                     }
@@ -504,4 +525,10 @@ fn print_config(cfg: &Config) {
         if cfg.api_key.is_some() { "definida (env/config)" } else { "AUSENTE — exporte SHVIA_API_KEY" }
     );
     println!("config : {}", Config::path().map(|p| p.display().to_string()).unwrap_or_default());
+    // A tabela de roteamento do orquestrador é estática justamente pra ser
+    // auditável — então ela tem que aparecer aqui.
+    println!("elenco (/plano):");
+    for (papel, perfil, esforco) in cfg.elenco_resolvido() {
+        println!("  {papel:<10} {perfil}  ·  esforço {esforco}");
+    }
 }

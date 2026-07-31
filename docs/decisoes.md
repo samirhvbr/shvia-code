@@ -76,3 +76,51 @@ Formato ADR. Não relitigar direção já decidida dentro de um how-to — linka
   (C5.2 `ToolRunner`/`--tools host` no `anna` + C5.3 provider no sidecar) só começa
   após o OK do modelo B — e mexe na branch ativa do `SSHVTERM-DESKTOP`, então entra
   como trabalho combinado, não silencioso.
+
+---
+
+## ADR-003 — Pipeline de papéis (`/plano`): arquiteto → dev aprova → executor → revisão
+
+- **Data:** 31/07/2026 · **Status:** Aceito (v0 codado, 0.9.0)
+- **Contexto:** o turno normal da Anna é um modelo fazendo tudo no mesmo
+  contexto: entender, planejar, editar e conferir. Funciona bem no pequeno e
+  degrada no médio — planejamento raso vira execução errada, e não há ninguém
+  conferindo o diff contra o que foi combinado. O `traycer` (clonado em
+  `~/x/SHVIA/traycer` como referência) resolve isso quebrando o trabalho em
+  fases; o que faz aquilo funcionar não é a escolha de modelo por fase, é o
+  **contrato entre as fases**.
+- **Decisão 1 — papéis com artefato tipado, não roteador.** Três papéis
+  (arquiteto/executor/revisor); o que atravessa a fronteira é `Plano` ou
+  `Veredito` validado por schema, nunca o histórico bruto. Contexto não viaja
+  entre papéis: cache de prompt é escopado por modelo, então repassar histórico
+  pagaria cache frio sem ganhar nada. Schema inválido faz a fase falhar alto
+  (com uma segunda tentativa levando o erro de volta pro modelo) em vez de
+  degradar em silêncio na fase seguinte.
+- **Decisão 2 — a tabela papel → (perfil, esforço) é ESTÁTICA**, no `config.toml`
+  (`[elenco.*]`). Um modelo-roteador classificando o pedido seria mais uma
+  chamada paga, erraria a classificação e não daria pra auditar. Estático é
+  grátis, versionável e visível no `anna config`. Esforço entra como segunda
+  dimensão porque é mais barato que trocar de perfil.
+- **Decisão 3 — só-leitura por construção.** `runner::SomenteLeitura` filtra as
+  ferramentas do arquiteto e do revisor **e** recusa a chamada se o modelo
+  insistir. Não é instrução de prompt: eles não escrevem porque não têm como.
+  `bash` fica fora da lista (comando que lê e comando que grava entram pela mesma
+  porta).
+- **Decisão 4 — dois gates de revisão, o barato primeiro.** Gate 0
+  determinístico (clippy/testes) antes do gate 1 (revisor-modelo): rodar um
+  modelo num diff que nem compila é pagar pra ouvir o que o compilador já disse
+  melhor. O gate 0 só executa comando que o `bash` já auto-aprovaria
+  (`Policy::Auto`) — não pode virar porta dos fundos pra rodar comando sem o dev
+  ver, o que contraria a regra de produto "nada roda sem o dev ver".
+- **Decisão 5 — o revisor julga contra o PLANO, não "revisa o código".** Os
+  `aceite` de cada passo são a régua. Pergunta aberta sempre acha mais uma coisa
+  e o loop não converge. Freios contra ping-pong: teto de 2 voltas por gate e
+  dedup por achado (`passo_id|aceite_violado`).
+- **Decisão 6 — o gate humano fica no plano, e `plano_errado` para o pipeline.**
+  Replanejar no meio do voo é caro, lento e tira o dev do fio — e ele está
+  sentado ali. Fechar o loop de volta no arquiteto fica pro v1, se a prática
+  mostrar que vale.
+- **Consequências:** três módulos novos (`orquestrador`, `plano`, `papel`), um
+  decorador em `runner`, e `agent::run_turn` passa a devolver o texto final do
+  turno (o REPL descarta; as fases que produzem artefato precisam). Nada muda no
+  caminho normal da Anna. Escopo do v0 e o que falta: [orquestrador.md](orquestrador.md).

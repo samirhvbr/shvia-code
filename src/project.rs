@@ -58,8 +58,15 @@ impl Project {
              fizer sentido. Só commite (git_commit) se o dev pedir.\n\n\
              Responda em pt-BR, direto ao ponto, citando arquivo:linha quando útil."
         };
-        let mut s = String::from(base);
-        s.push_str(&format!("\n\nProjeto: {} (raiz: {}).", self.name, self.root.display()));
+        format!("{base}\n\n{}", self.bloco_contexto())
+    }
+
+    /// Cabeçalho do projeto + instruções do repo (ANNA.md/CLAUDE.md/AGENTS.md).
+    /// Separado do system prompt da Anna porque os papéis do orquestrador
+    /// (arquiteto/executor/revisor) montam prompts próprios e precisam do mesmo
+    /// contexto — duplicar a regra era garantir que uma das duas envelhecesse.
+    pub fn bloco_contexto(&self) -> String {
+        let mut s = format!("Projeto: {} (raiz: {}).", self.name, self.root.display());
         if let Some(ctx) = &self.context {
             let trimmed: String = ctx.chars().take(6000).collect();
             s.push_str("\n\nInstruções do projeto (arquivo de contexto):\n");

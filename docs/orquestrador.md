@@ -117,17 +117,36 @@ profile = "seu-perfil-default"
 verificacao = ["cargo clippy --all-targets -- -D warnings", "cargo test"]
 
 [elenco.arquiteto]
-profile = "opus5@shvia"
+profile = "claude-opus-4-8@anthropic"
 effort  = "xhigh"
 
 [elenco.executor]
-profile = "sonnet5@shvia"
+profile = "claude-sonnet-4-6@anthropic"
 effort  = "high"
 
 [elenco.revisor]
-profile = "opus5@shvia"     # de preferência família diferente do executor
+profile = "deepseek-reasoner@deepseek"   # família DIFERENTE do executor — ver abaixo
 effort  = "high"
 ```
+
+> **Os nomes acima são os reais do servidor** (conferidos em 16/08/2026 no catálogo
+> de produção, 41 perfis). O exemplo anterior desta seção usava `opus5@shvia` e
+> `sonnet5@shvia`, que **não existem** — copiar aquele bloco dava erro de
+> roteamento na primeira fase. Confira o seu com `anna config` ou no seletor do
+> ShvIA; o catálogo muda quando um provedor entra ou sai.
+>
+> **E o revisor mudou de família de propósito.** O exemplo anterior punha
+> `opus5` no arquiteto **e** no revisor, com `sonnet5` no executor — Opus e Sonnet
+> são a MESMA família, então o comentário *"de preferência família diferente"*
+> estava sendo contrariado pelo próprio exemplo que o carregava. O ponto do revisor
+> é ter modo de falha independente: um modelo da mesma casa tende a errar junto,
+> aceitar a mesma alucinação e concordar com a mesma leitura torta do plano.
+> `deepseek-reasoner@deepseek` é uma escolha, não uma prescrição — vale qualquer
+> perfil de outra família.
+>
+> ⚠️ **O elenco é a conta.** Três papéis em perfis de nuvem custam três chamadas
+> pagas por volta do pipeline. Para dogfood, `ShvIA:latest@srv1` (on-prem, a V100)
+> não entra na fatura — vale começar por ele antes de calibrar com modelo caro.
 
 Papel omitido cai no perfil global. Elenco inteiro vazio: o pipeline roda mesmo
 assim (e avisa que não é blend de nada). `anna config` mostra a tabela resolvida.

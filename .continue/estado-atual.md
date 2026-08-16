@@ -185,10 +185,28 @@ O anna é CLI **client-side** — "produção" = binário novo nos lugares que o
       limpo) → `/rollback` → `/rollback aplicar` devolve o conteúdo.
 - [ ] (pré-existente, segue aberto) **SMOKE AO VIVO** com `SHVIA_API_KEY` — fecha
       C0 + dogfood C4; e **C5.3** (provider Python no SShvTerm).
-- [ ] **`/plano` ao vivo (0.9.0)**: configurar o `[elenco]` com perfis reais e
-      rodar numa tarefa pequena de verdade. O que só se mede rodando: se o
-      arquiteto escreve `o_que` autossuficiente, se os `aceite` são régua o
-      bastante pro loop fechar, e se o revisor acha o que deve sem virar crítica
-      aberta. **O prompt do revisor deve ser reescrito depois de ~10–15 planos
-      reais** — o veredito bom sai dos erros que o executor comete NESTE código,
-      não dos que dava pra imaginar antes.
+- [ ] **`/plano` ao vivo (0.9.0)** — 🔑 **depende de uma `SHVIA_API_KEY` sua**, e é
+      a única coisa que falta. O `anna` fala com `https://ai.shvia.org` (não com o
+      Ollama direto), e a chave não vem de argumento de linha por decisão de
+      segurança (aparece no `ps` — SECURITY §2.4): só de `SHVIA_API_KEY` no
+      ambiente ou do `config.toml` 0600.
+
+      > **Preparado em 16/08/2026, para a rodada ser um comando só:**
+      > - binário **0.9.0 compilado** (`cargo build --release`) — o que estava no
+      >   disco era de 16/07, ainda da linha 0.8.x, e não tinha `/plano`.
+      >   43 testes verdes, clippy limpo.
+      > - **`[elenco]` da doc consertado** com os perfis REAIS do catálogo de
+      >   produção (41 perfis, conferidos no dia). O exemplo anterior usava
+      >   `opus5@shvia`/`sonnet5@shvia`, que **não existem** — copiar aquele bloco
+      >   dava erro de roteamento na primeira fase. E o revisor passou para outra
+      >   família: o exemplo antigo punha Opus no arquiteto e no revisor com Sonnet
+      >   no executor, contrariando a regra *"família diferente do executor"*
+      >   escrita ao lado dele → [`orquestrador.md` §Configurar](../docs/orquestrador.md)
+      > - **Para dogfood, comece por `ShvIA:latest@srv1`** (on-prem): três papéis em
+      >   perfis de nuvem são três chamadas pagas por volta do pipeline.
+
+      O que só se mede rodando: se o arquiteto escreve `o_que` autossuficiente, se
+      os `aceite` são régua o bastante pro loop fechar, e se o revisor acha o que
+      deve sem virar crítica aberta. **O prompt do revisor deve ser reescrito
+      depois de ~10–15 planos reais** — o veredito bom sai dos erros que o executor
+      comete NESTE código, não dos que dava pra imaginar antes.

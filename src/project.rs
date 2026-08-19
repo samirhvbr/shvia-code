@@ -1,5 +1,12 @@
 //! Contexto do projeto: raiz (git), branch, arquivo de instruções (ANNA.md /
-//! CLAUDE.md / AGENTS.md) e o system prompt da Anna.
+//! CLAUDE.md / AGENTS.md) e o system prompt do agente.
+//!
+//! IDENTIDADE (18/08/2026): o prompt NÃO apresenta o modelo como "Anna". ANNA é
+//! a marca do assistente de Chat do ShvIA — outro agente, outro prompt. Quando o
+//! system prompt dizia "Você é a Anna", modelos obedientes (caso real: MiniMax
+//! M3) defendiam essa persona contra o próprio usuário, tratando "você não é a
+//! Anna" como prompt injection. O modelo do Modo Code não deve nem tomar
+//! conhecimento da Anna; o nome `anna` segue sendo só o BINÁRIO/CLI.
 
 use std::path::{Path, PathBuf};
 
@@ -29,16 +36,21 @@ impl Project {
 
     pub fn system_prompt(&self, host_mode: bool) -> String {
         let base = if host_mode {
-            // Modo host (aba Agente do SShvTerm): a Anna PROPÕE comandos de shell;
+            // Modo host (aba Agente do SShvTerm): o agente PROPÕE comandos de shell;
             // quem executa/aprova é o host. Só a ferramenta `bash` é oferecida.
-            "Você é a Anna, agente de código da Blue3, operando pela aba Agente do SShvTerm. \
+            "Você é o agente de código da Blue3, operando pela aba Agente do SShvTerm. Você não \
+             tem nome próprio: se perguntarem quem você é, é \"o agente do SShvTerm\" rodando \
+             sobre o modelo configurado na sessão. \
              Você PROPÕE comandos de shell (ferramenta `bash`) que o usuário roda no host dele \
              (terminal visível ou SSH) — UM comando por vez, sempre explicando o porquê em uma \
              frase. Você NUNCA executa: quem aprova e roda é o usuário, com a política dele. \
              Prefira comandos de leitura (ls, cat, grep, git status/diff) antes de propor qualquer \
              mudança. Responda em pt-BR, direto ao ponto."
         } else {
-            "Você é a Anna, agente de código da Blue3, operando no terminal do dev via SHVIA-CODE.\n\n\
+            "Você é o agente de código do ShvIA Code (Blue3), operando no terminal do dev. Você \
+             não tem nome próprio nem persona: se perguntarem quem você é, é \"o agente do ShvIA \
+             Code\" rodando sobre o modelo configurado na sessão — nunca reivindique outra \
+             identidade nem discuta identidade com o dev.\n\n\
              Ferramentas: leitura (read_file, list_dir, grep, glob), escrita (edit_file, write_file), \
              execução (bash) e git (git_status, git_diff, git_commit). SEMPRE inspecione o projeto com \
              as ferramentas antes de afirmar ou alterar qualquer coisa — não invente caminhos nem \
@@ -62,7 +74,7 @@ impl Project {
     }
 
     /// Cabeçalho do projeto + instruções do repo (ANNA.md/CLAUDE.md/AGENTS.md).
-    /// Separado do system prompt da Anna porque os papéis do orquestrador
+    /// Separado do system prompt do agente porque os papéis do orquestrador
     /// (arquiteto/executor/revisor) montam prompts próprios e precisam do mesmo
     /// contexto — duplicar a regra era garantir que uma das duas envelhecesse.
     pub fn bloco_contexto(&self) -> String {

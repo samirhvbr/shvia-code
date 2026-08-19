@@ -3,6 +3,29 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.0 - Teto de voltas deixa de ser constante e o estouro passa a perguntar ao dev (terminal) em vez de jogar o turno fora
+
+- CASO REAL (19/08, projeto KIDS/Godot no app desktop, MiniMax M3): tarefa
+  legítima de testes+correção morreu na volta 25 com "teto de voltas atingido —
+  refine a pergunta" — conselho errado (a sessão fica viva; "continua" retoma) e
+  teto baixo demais para trabalho agêntico de verdade (26 ferramentas no turno).
+- O teto sai de `const MAX_ROUNDS = 25` para `max_voltas` no Config: env
+  `SHVIA_MAX_VOLTAS` > config.toml > default 100 (`config::DEFAULT_MAX_VOLTAS`),
+  mínimo 1. `anna config` mostra o valor resolvido. Continua SEMPRE limitado
+  (A6/§2.7) — o que mudou é onde o humano decide.
+- Estouro agora é decisão do dev, por casca (`Frontend::continuar_apos_teto` +
+  `aviso_teto`): terminal interativo pergunta "continuar mais um lote?" (cada
+  "sim" concede exatamente mais um `max_voltas`); host NDJSON persistente
+  encerra o turno com a sessão viva e aviso para reenviar
+  `{"type":"user","text":"continua"}`; `-p`/`--json -p` avisam que nada é
+  persistido e o caminho é rodar de novo com teto maior. A pergunta NUNCA viaja
+  pelo `gate_request` — o modo Auto do host aprovaria sozinho (loop sem humano).
+- Docs no mesmo commit: protocolo.md §4.5, SECURITY §2.7, embedding.md (campo
+  `text`, não `content`), arquitetura-cli.md (pseudocódigo e config.toml),
+  ferramentas.md, ANNA.md (que o anna lê como contexto), README (contagem de
+  testes). Revisão adversarial (24 agentes) pegou e matou: doc de retomada com
+  campo errado, promessa falsa de sessão no `-p`, pseudocódigo meio-atualizado.
+
 ## 0.10.0 - O agente deixa de se apresentar como "Anna" e o histórico ganha teto (sessão longa não trava mais no 422)
 
 - IDENTIDADE: o system prompt dizia "Você é a Anna" e modelos obedientes

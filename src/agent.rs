@@ -14,8 +14,6 @@ use crate::telemetry::Telemetry;
 use crate::types::Message;
 use anyhow::Result;
 
-const MAX_ROUNDS: usize = 25;
-
 // ── Teto de histórico por requisição ──────────────────────────────────────────
 // O gateway (`/code/chat`, SHVIA-WEB) valida `messages` com `max:200` — teto
 // anti-abuso das SECURITY_GUIDELINES §3.3. Estourar não degrada: o gateway
@@ -97,7 +95,18 @@ pub async fn run_turn(
         memory::user_prompt(&last.content);
     }
     let mut ultimo_texto = String::new();
-    for _round in 0..MAX_ROUNDS {
+    // Teto de voltas por turno (SECURITY §2.7, default em config::DEFAULT_MAX_VOLTAS):
+    // o loop é SEMPRE limitado — estourou, quem decide se vale mais um lote é o
+    // dev (Frontend::continuar_apos_teto), nunca o modelo. `.max(1)` é cinto de
+    // segurança para Config montada na mão (o `load()` já garante ≥ 1).
+    let lote = cfg.max_voltas.max(1);
+    let mut teto = lote;
+    let mut volta = 0usize;
+    while volta < teto || fe.continuar_apos_teto(teto) {
+        if volta >= teto {
+            teto += lote;
+        }
+        volta += 1;
         // A cada volta (as tools da volta anterior somam mensagens): o gateway
         // rejeita >200 itens, e uma sessão que estoura fica presa sem isto.
         let compactadas = compactar_historico(messages);
@@ -137,7 +146,7 @@ pub async fn run_turn(
         }
     }
 
-    fe.warn("teto de voltas atingido — refine a pergunta.");
+    fe.aviso_teto(teto);
     fe.turn_end(telemetry);
     Ok(ultimo_texto)
 }

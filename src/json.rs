@@ -17,11 +17,14 @@ use std::io::{self, Write};
 pub struct JsonSink {
     /// Escopos liberados por "sempre nesta sessão" (decision=always).
     allowed: HashSet<String>,
+    /// `--json -p`: o processo termina após um turno, sem sessão para retomar —
+    /// muda o conselho do `aviso_teto` (não existe "continua" possível).
+    single_shot: bool,
 }
 
 impl JsonSink {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(single_shot: bool) -> Self {
+        Self { single_shot, ..Self::default() }
     }
 
     fn emit(&self, v: Value) {
@@ -77,6 +80,28 @@ impl Frontend for JsonSink {
         self.emit(json!({"type":"warn","message":msg}));
     }
 
+    fn continuar_apos_teto(&mut self, _teto: usize) -> bool {
+        // Nunca pergunta. Bloquear esperando uma resposta que hosts existentes
+        // não conhecem seria deadlock; e rotear pelo `gate_request` deixaria o
+        // modo Auto do host aprovar sozinho — loop sem humano, exatamente o que
+        // o teto (A6) existe para impedir. O `aviso_teto` orienta a retomada.
+        false
+    }
+
+    fn aviso_teto(&mut self, teto: usize) {
+        let dica = if self.single_shot {
+            "o processo termina sem persistir sessão: rode de novo com um teto maior \
+             (env SHVIA_MAX_VOLTAS ou `max_voltas` no config.toml)"
+        } else {
+            // Sessão persistente: `messages` vive no loop do main — reenviar
+            // `{"type":"user","text":"continua"}` (o campo é `text`, como na
+            // tabela do embedding.md) retoma de onde parou.
+            "a sessão continua viva: reenvie {\"type\":\"user\",\"text\":\"continua\"} \
+             para retomar, ou suba `max_voltas` no config.toml"
+        };
+        self.warn(&format!("teto de {teto} voltas do turno atingido — {dica}."));
+    }
+
     fn approve(&mut self, policy: Policy, scope: &str, id: &str, preview: &Preview) -> bool {
         if policy == Policy::Auto {
             return true;
@@ -121,5 +146,19 @@ impl Frontend for JsonSink {
             }
             // qualquer outra linha durante um gate pendente: ignora e segue esperando
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_nunca_ganha_lote_extra() {
+        // Regra A6 (§2.7): no NDJSON a pergunta de continuação NÃO existe — nem
+        // pelo gate_request (o modo Auto do host aprovaria sozinho, loop sem
+        // humano). Vale para o host persistente e para o --json -p.
+        assert!(!JsonSink::new(false).continuar_apos_teto(100));
+        assert!(!JsonSink::new(true).continuar_apos_teto(100));
     }
 }

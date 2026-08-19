@@ -47,8 +47,17 @@
 6. **Transporte**: HTTPS obrigatório; host default `ai.shvia.org`; trocar de
    host exige edição manual da config (nunca por flag do modelo/tool). Erro de
    certificado = aborta, sem opção interativa de "ignorar". (A8)
-7. **Limites no loop**: teto de iterações de tool por turno (default 25) e teto
-   de bytes por resultado de tool — estouro para e pergunta ao dev. (A6)
+7. **Limites no loop**: teto de voltas por turno (default 100 — `max_voltas` no
+   config.toml / env `SHVIA_MAX_VOLTAS`, nunca ilimitado) e teto de bytes por
+   resultado de tool. Estouro do teto de voltas: o terminal interativo pergunta
+   ao dev se libera mais um lote; o host NDJSON persistente encerra o turno com
+   a sessão viva no processo ("continua" retoma); `-p`/`--json -p` terminam sem
+   persistir nada — o aviso manda rodar de novo com teto maior. A pergunta NUNCA viaja pelo
+   `gate_request`: o modo Auto de um host a aprovaria sozinho — loop sem humano,
+   exatamente o que este teto impede. O default subiu de 25 em 19/08/2026:
+   tarefa legítima (testes+correção em projeto Godot) morria no meio com 26
+   ferramentas; as proteções reais de custo seguem sendo o gate por ferramenta,
+   o teto do gateway (§3.3) e a telemetria por volta. (A6)
 
 ## 3. Regras inegociáveis (servidor `/api/v1/code/chat`, repo SHVIA-WEB)
 

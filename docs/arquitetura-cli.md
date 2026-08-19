@@ -86,7 +86,10 @@ build-local; `cargo clippy -D warnings` antes de release; TLS via rustls.
 ```rust
 // pseudocódigo
 async fn turn(state: &mut Session, ui: &dyn Ui, gate: &mut Gate) -> Result<()> {
-    for round in 1..=MAX_ROUNDS {                       // MAX_ROUNDS default 25
+    let (lote, mut teto, mut volta) = (cfg.max_voltas, cfg.max_voltas, 0);
+    while volta < teto || ui.continuar_apos_teto(teto) { // estouro: só o terminal interativo pergunta
+        if volta >= teto { teto += lote; }                // cada "sim" = exatamente mais um lote
+        volta += 1;
         let resp = api::code_chat(&state.messages, tools::defs(), &cfg).await?;
         // resp já foi renderizada ao vivo pelo ui (text_delta) e coletou tool_calls/usage
         telemetry::add(resp.usage);
@@ -99,7 +102,7 @@ async fn turn(state: &mut Session, ui: &dyn Ui, gate: &mut Gate) -> Result<()> {
             state.push_tool(call.id, out);               // role=tool
         }
     }
-    ui.warn("teto de voltas atingido — pergunte de novo ou refine.");
+    ui.aviso_teto(teto); // conselho por casca: REPL/host vivo = "continua"; -p = teto maior
     Ok(())
 }
 ```
@@ -113,6 +116,7 @@ always), executa e devolve o `content` (sucesso/`ERRO:`/`RECUSADO:`).
 ```toml
 url        = "https://ai.shvia.org"
 profile    = "qwen-coder@shvia1"   # opcional; default do usuário se ausente
+max_voltas = 100                   # teto de voltas por turno (env SHVIA_MAX_VOLTAS ganha)
 # api_key NÃO fica aqui em texto se der pra usar keychain; fallback: campo 0600.
 # Precedência: env SHVIA_API_KEY > config. Nunca em argumento de linha.
 ```

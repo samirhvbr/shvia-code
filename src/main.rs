@@ -45,6 +45,7 @@ use telemetry::Telemetry;
 use types::Message;
 use ui::Ui;
 
+// version.md ganhou um bloco de aviso em 0.10.1 — só a 1ª linha é a versão.
 const VERSION: &str = include_str!("../version.md");
 
 #[derive(Parser)]
@@ -192,7 +193,7 @@ fn main() -> anyhow::Result<()> {
 
     // Motor headless (NDJSON) — pra embutir noutra casca (docs/embedding.md).
     if cli.json {
-        let mut fe = json::JsonSink::new();
+        let mut fe = json::JsonSink::new(non_interactive);
         let mut messages = vec![Message::system(project.system_prompt(host_mode))];
         if let Some(prompt) = cli.prompt {
             run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), prompt);
@@ -516,10 +517,13 @@ fn open_in_browser(path: &Path) {
 }
 
 fn print_config(cfg: &Config) {
-    println!("anna {}", VERSION.trim());
+    println!("anna {}", VERSION.lines().next().unwrap_or("").trim());
     println!("url    : {}", cfg.url);
     println!("perfil : {}", cfg.profile.clone().unwrap_or_else(|| "(default do usuário)".into()));
     println!("esforço: {}", cfg.effort.clone().unwrap_or_else(|| "(default do servidor)".into()));
+    // O teto é um parâmetro de SEGURANÇA (§2.7) que virou configurável — o
+    // comando que audita a config resolvida tem que mostrá-lo.
+    println!("voltas : teto de {} por turno (env SHVIA_MAX_VOLTAS / `max_voltas` no config)", cfg.max_voltas);
     println!(
         "chave  : {}",
         if cfg.api_key.is_some() { "definida (env/config)" } else { "AUSENTE — exporte SHVIA_API_KEY" }

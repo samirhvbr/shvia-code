@@ -445,6 +445,7 @@ mod tests {
             profile: None,
             api_key: None,
             effort: None,
+            max_voltas: crate::config::DEFAULT_MAX_VOLTAS,
             elenco: Default::default(),
             verificacao: None,
         };

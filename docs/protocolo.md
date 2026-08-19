@@ -89,7 +89,12 @@ data: {"kind":"<tipo>","data":{...}}
          { role:"tool", tool_call_id:<id>, content:<resultado> }  (um por call)
        → volta ao passo 2 com o histórico crescido
      - sem tool_calls?  → é a resposta final; encerra o turno
-5. teto de voltas por turno (SECURITY §2.7, default 25) — estoura, pergunta ao dev
+5. teto de voltas por turno (SECURITY §2.7, default 100; `max_voltas` no
+   config.toml ou env `SHVIA_MAX_VOLTAS`) — estoura: terminal interativo
+   pergunta se continua mais um lote; host NDJSON persistente encerra o
+   turno com a sessão viva (reenviar `{"type":"user","text":"continua"}`
+   retoma); `-p`/`--json -p` terminam sem persistir nada — o aviso manda
+   rodar de novo com teto maior
 ```
 
 O **servidor nunca executa ferramenta** — só devolve `tool_call`. Execução (e os

@@ -24,4 +24,15 @@ pub trait Frontend {
     /// `id` = o `tool_call.id` (correlaciona a proposta com a decisão e o resultado
     /// no host — mesmo id no `gate_request` e no `tool_result`).
     fn approve(&mut self, policy: Policy, scope: &str, id: &str, preview: &Preview) -> bool;
+    /// Estouro do teto de voltas do turno (SECURITY §2.7): decide se o agente
+    /// ganha MAIS UM LOTE de `max_voltas`. Só o terminal interativo pergunta de
+    /// verdade; host NDJSON e `-p` devolvem `false` — o turno encerra com a
+    /// sessão preservada (um "continua" retoma de onde parou).
+    fn continuar_apos_teto(&mut self, teto: usize) -> bool;
+    /// Aviso do estouro (depois de `continuar_apos_teto` negar). Mora no
+    /// Frontend porque o conselho honesto depende da casca: REPL e host NDJSON
+    /// persistente seguem com a sessão viva ("continua" retoma); `-p` e
+    /// `--json -p` terminam o processo SEM persistir nada — o único conselho
+    /// possível é rodar de novo com teto maior.
+    fn aviso_teto(&mut self, teto: usize);
 }

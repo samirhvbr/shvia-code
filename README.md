@@ -16,7 +16,7 @@ ou nuvem BYOK).
 (com gates), commita, retoma **sessões**, troca de modelo (`/model`) e responde
 em markdown. Em 0.9.0 entra o **pipeline de papéis** (`/plano` —
 [orquestrador.md](docs/orquestrador.md)): arquiteto → você aprova → executor →
-revisão. `cargo clippy -D warnings` limpo, 43 testes verdes. **Falta só o
+revisão. `cargo clippy -D warnings` limpo, 51 testes verdes. **Falta só o
 smoke ao vivo** (precisa de `SHVIA_API_KEY` + gateway 2.16.0) pra provar o loop
 de ponta a ponta contra um modelo real — inclusive o `/plano`, que até aqui só
 foi exercitado nos testes de contrato (parse/validação/só-leitura), nunca contra

@@ -36,7 +36,8 @@ o servidor só infere. Binário único `anna`.
 ## Mapa dos módulos (`src/`)
 
 - `main` — REPL + modo `-p` + subcomandos (`config`, `sessions`) + slash-commands.
-- `agent` — o loop (deltas → tool_calls → executa local → repete, teto 25).
+- `agent` — o loop (deltas → tool_calls → executa local → repete; teto
+  `max_voltas` por turno, default 100 — estouro pergunta ao dev no terminal).
 - `api` + `types` — POST e parser do SSE; structs do protocolo.
 - `tools` — read/list/grep/glob · edit/write · bash · git. Registry (`defs`+`run`).
 - `guard` — denylist + confinamento à raiz (`resolve`/`resolve_new`).

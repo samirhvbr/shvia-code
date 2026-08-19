@@ -136,6 +136,36 @@ impl Frontend for Ui {
         println!("{YELLOW}{msg}{RESET}");
     }
 
+    fn aviso_teto(&mut self, teto: usize) {
+        if self.non_interactive {
+            // -p não abre o Store de sessões (só o autosave do REPL grava):
+            // não existe "continua" possível — o conselho é o teto maior.
+            self.warn(&format!(
+                "teto de {teto} voltas do turno atingido — o modo -p não persiste sessão: \
+                 rode de novo com um teto maior (env SHVIA_MAX_VOLTAS ou `max_voltas` no \
+                 config.toml)."
+            ));
+        } else {
+            self.warn(&format!(
+                "teto de {teto} voltas do turno atingido — diga \"continua\" para retomar \
+                 de onde parou, ou suba `max_voltas` no config.toml (env SHVIA_MAX_VOLTAS)."
+            ));
+        }
+    }
+
+    fn continuar_apos_teto(&mut self, teto: usize) -> bool {
+        if self.non_interactive {
+            // -p/CI: ninguém para responder — encerra o turno (o warn orienta).
+            return false;
+        }
+        matches!(
+            gate::ask(&format!(
+                "  teto de {teto} voltas do turno atingido — continuar mais um lote? [s]im / [n]ão > "
+            )),
+            's' | 'S'
+        )
+    }
+
     fn approve(&mut self, policy: Policy, scope: &str, _id: &str, preview: &Preview) -> bool {
         match policy {
             Policy::Auto => true,
@@ -173,5 +203,16 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         let cut: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{cut}…")
+    }
+}
+
+#[cfg(test)]
+mod tests_teto {
+    use super::*;
+
+    #[test]
+    fn nao_interativo_nunca_ganha_lote_extra() {
+        // -p/CI: não há humano para responder — o teto é duro (A6/§2.7).
+        assert!(!Ui::new(true).continuar_apos_teto(100));
     }
 }

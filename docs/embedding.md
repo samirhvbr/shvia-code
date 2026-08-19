@@ -48,6 +48,14 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 `policy` ∈ `auto` (nunca pede) · `confirm` (`approve`/`always`/`reject`) ·
 `always` (destrutivo — `always` não vale, só `approve`/`reject`).
 
+**Teto de voltas** (SECURITY §2.7): no host o motor NUNCA pergunta se continua —
+estourou, emite `warn` + `turn_done`. No modo persistente a sessão segue viva no
+processo: a casca pode oferecer um botão "continuar" que só reenvia
+`{"type":"user","text":"continua"}` (campo `text`, como na tabela acima). Em
+`--json -p` o processo termina sem persistir nada — o aviso já manda rodar de
+novo com teto maior. (A pergunta não vira `gate_request` de propósito: o modo
+Auto do host aprovaria sozinho — loop sem humano.)
+
 `preview` (o que aprovar):
 - `{"kind":"diff","path":"src/x.rs","diff":"...unificado sem cor..."}`
 - `{"kind":"command","command":"cargo test","why":"..."}`

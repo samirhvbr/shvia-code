@@ -1,4 +1,4 @@
-0.10.1
+0.11.0
 
 > ⚠️ **O `Cargo.toml` NÃO é propagado automaticamente** (este repo não tem
 > `sync-version`). O commit 0.10.0 bumpou só este arquivo e deixou o manifesto

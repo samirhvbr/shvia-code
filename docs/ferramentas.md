@@ -123,7 +123,9 @@ Convenções do `content`:
 - Todo resultado tem teto de bytes (default 64 KiB); acima, recorta com aviso —
   protege o contexto e o custo. `read_file` aceita `max_bytes`.
 - `.gitignore` respeitado em list/grep/glob; `.git/` oculto.
-- Teto de voltas de tool por turno (default 25) no loop (SECURITY §2.7).
+- Teto de voltas de tool por turno (default 100, `max_voltas`/`SHVIA_MAX_VOLTAS`)
+  no loop (SECURITY §2.7) — estouro pergunta ao dev no terminal; no host encerra
+  o turno com a sessão preservada ("continua" retoma).
 
 ## 5. Checkpoint automático & `/rollback` (0.8.0)
 

@@ -19,12 +19,20 @@ use std::path::PathBuf;
 /// com o servidor que serviu a página.
 pub const DEFAULT_URL: &str = "https://ai.shvia.org";
 
+/// Teto de voltas (idas ao modelo) por turno sem `max_voltas` no config nem
+/// `SHVIA_MAX_VOLTAS` no ambiente. É a proteção A6 (SECURITY §2.7): o loop é
+/// SEMPRE limitado — o valor só define onde o dev é chamado a decidir. Subiu de
+/// 25 em 19/08/2026: tarefa legítima (testes+correção num projeto Godot) morreu
+/// no meio com 26 ferramentas, e "refine a pergunta" era conselho errado.
+pub const DEFAULT_MAX_VOLTAS: usize = 100;
+
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     url: Option<String>,
     profile: Option<String>,
     api_key: Option<String>,
     effort: Option<String>,
+    max_voltas: Option<usize>,
     elenco: Option<Elenco>,
     verificacao: Option<Vec<String>>,
 }
@@ -36,6 +44,10 @@ pub struct Config {
     pub api_key: Option<String>,
     /// Esforço de raciocínio (low|medium|high|xhigh|max). O gateway valida.
     pub effort: Option<String>,
+    /// Teto de voltas por turno (SECURITY §2.7). Estourou: terminal interativo
+    /// pergunta se continua mais um lote; host NDJSON/`-p` encerram o turno
+    /// avisando que "continua" retoma. `load()` garante ≥ 1.
+    pub max_voltas: usize,
     /// Tabela papel → (perfil, esforço) do orquestrador. Vazia = todos os papéis
     /// no perfil global (o pipeline roda, mas avisa que não é blend nenhum).
     pub elenco: Elenco,
@@ -79,6 +91,16 @@ fn url_seguro(url: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Resolve o teto de voltas: env > arquivo > default, nunca abaixo de 1.
+/// Env que não parseia (ex.: "abc") cai para o arquivo em vez de virar pânico —
+/// mesmo espírito do `effort`, que ignora env vazio.
+fn resolver_max_voltas(env: Option<String>, arquivo: Option<usize>) -> usize {
+    env.and_then(|v| v.trim().parse::<usize>().ok())
+        .or(arquivo)
+        .unwrap_or(DEFAULT_MAX_VOLTAS)
+        .max(1)
+}
+
 impl Config {
     /// Caminho do config.toml (`~/.config/shvia-code/config.toml`).
     pub fn path() -> Option<PathBuf> {
@@ -114,6 +136,8 @@ impl Config {
 
         let profile = std::env::var("SHVIA_PROFILE").ok().or(file.profile);
         let effort = std::env::var("SHVIA_EFFORT").ok().filter(|e| !e.is_empty()).or(file.effort);
+        let max_voltas =
+            resolver_max_voltas(std::env::var("SHVIA_MAX_VOLTAS").ok(), file.max_voltas);
 
         // Chave: env tem precedência; senão o arquivo (0600). Nunca de arg.
         let api_key = std::env::var("SHVIA_API_KEY")
@@ -124,7 +148,7 @@ impl Config {
         let elenco = file.elenco.unwrap_or_default();
         let verificacao = file.verificacao;
 
-        Ok(Self { url, profile, api_key, effort, elenco, verificacao })
+        Ok(Self { url, profile, api_key, effort, max_voltas, elenco, verificacao })
     }
 
     /// `Config` derivada para um papel do orquestrador: troca só perfil/esforço,
@@ -174,6 +198,7 @@ mod tests_elenco {
             profile: Some("global".into()),
             api_key: None,
             effort: None,
+            max_voltas: DEFAULT_MAX_VOLTAS,
             elenco: Elenco::default(),
             verificacao: None,
         }
@@ -269,5 +294,25 @@ mod tests_url_seguro {
         assert!(!url_seguro("ftp://localhost"));
         assert!(!url_seguro("nao-e-url"));
         assert!(!url_seguro(""));
+    }
+}
+
+#[cfg(test)]
+mod tests_max_voltas {
+    use super::*;
+
+    #[test]
+    fn precedencia_env_arquivo_default() {
+        assert_eq!(resolver_max_voltas(Some("40".into()), Some(60)), 40, "env ganha do arquivo");
+        assert_eq!(resolver_max_voltas(None, Some(60)), 60, "arquivo ganha do default");
+        assert_eq!(resolver_max_voltas(None, None), DEFAULT_MAX_VOLTAS);
+    }
+
+    #[test]
+    fn env_invalido_cai_para_o_arquivo_e_zero_vira_um() {
+        assert_eq!(resolver_max_voltas(Some("abc".into()), Some(60)), 60);
+        // 0 seria um agente que nunca chama o modelo — erro de config vira o mínimo útil.
+        assert_eq!(resolver_max_voltas(Some("0".into()), None), 1);
+        assert_eq!(resolver_max_voltas(None, Some(0)), 1);
     }
 }

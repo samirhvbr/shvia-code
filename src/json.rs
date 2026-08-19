@@ -93,11 +93,14 @@ impl Frontend for JsonSink {
             "o processo termina sem persistir sessão: rode de novo com um teto maior \
              (env SHVIA_MAX_VOLTAS ou `max_voltas` no config.toml)"
         } else {
-            // Sessão persistente: `messages` vive no loop do main — reenviar
-            // `{"type":"user","text":"continua"}` (o campo é `text`, como na
-            // tabela do embedding.md) retoma de onde parou.
-            "a sessão continua viva: reenvie {\"type\":\"user\",\"text\":\"continua\"} \
-             para retomar, ou suba `max_voltas` no config.toml"
+            // Sessão persistente: `messages` vive no loop do main, então o
+            // próximo turno retoma de onde parou. A CASCA mostra este texto na
+            // timeline do usuário — o payload NDJSON (`{"type":"user",
+            // "text":"continua"}`, docs/embedding.md) é assunto de quem
+            // implementa o host, não de quem lê a tela: em 19/08 esta string
+            // apareceu como JSON cru para o usuário no app desktop.
+            "a sessão continua viva: peça \"continua\" para retomar de onde parou, \
+             ou aumente o teto (`max_voltas` no config.toml)"
         };
         self.warn(&format!("teto de {teto} voltas do turno atingido — {dica}."));
     }

@@ -3,6 +3,14 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.1 - O aviso do teto para de vazar JSON de protocolo na tela do usuário
+
+- A casca renderiza a string do `warn` na timeline, então `aviso_teto` do
+  `JsonSink` é texto para HUMANO: mandar `{"type":"user","text":"continua"}` ali
+  colocou payload NDJSON na frente de quem só quer continuar o trabalho (visto
+  em 19/08 no app desktop, um turno depois de a 0.11.0 subir). O payload segue
+  documentado no `embedding.md`, que é onde quem implementa host vai olhar.
+
 ## 0.11.0 - Teto de voltas deixa de ser constante e o estouro passa a perguntar ao dev (terminal) em vez de jogar o turno fora
 
 - CASO REAL (19/08, projeto KIDS/Godot no app desktop, MiniMax M3): tarefa

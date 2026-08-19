@@ -3,6 +3,34 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.2 - O gate de aprovação para de perguntar o que ele mesmo classifica como leitura
+
+- **O relato (19/08):** *"no modo Aprovação Auto está demandando muito ainda,
+  tem muita coisa como `ls`"*. O `ls` sozinho já era `Auto` — o que pedia
+  aprovação era `cd KIDS-THALO && ls`, porque a string tinha `&&` e isso
+  derrubava o comando INTEIRO do allowlist. O agente compõe `cd <pasta> && <cmd>`
+  o tempo todo, então praticamente toda inspeção virava pergunta.
+- **Segmento a segmento.** `&&` deixa de ser motivo de recusa: cada trecho é
+  conferido isoladamente e **todos** precisam passar; um fora da lista basta para
+  virar `Confirm`. O `is_destructive` continua rodando sobre a string inteira
+  ANTES disso, então `ls && git push` segue `Always`.
+- **A lista de leitura cresceu** com o que faltava e aparecia toda hora: `grep`,
+  `rg`, `awk`, `cut`, `sort`, `uniq`, `diff`, `jq`, `which`, `cd`, `stat`,
+  `basename`, `find` (com guarda) e os `git` de leitura (`rev-parse`,
+  `ls-files`, `blame`…). Critério: não escreve, não apaga, não sai para a rede.
+- **`sed` ficou de fora, e está registrado por quê:** `sed -n` é leitura, mas
+  `sed -n 's/a/b/w saida'` grava, e separar isso de um `w` que é só parte do
+  padrão (`/warn/p`) exige parsear sed. Guarda incompleta em gate de segurança é
+  pior que guarda nenhuma. Quem quer intervalo de linhas usa `head`/`tail`/`awk`.
+- **O scanner passou a conhecer aspas**, e isso corrigiu dois erros que a versão
+  ingênua tinha — os dois no mesmo comando real, `awk 'NR>=37 && NR<=46' x`: o
+  `&&` dentro do script era tratado como encadeamento, e o `>=` era lido como
+  redirecionamento. Aspa simples e dupla **não** são equivalentes: dentro de
+  `"…"` o shell ainda expande `$(…)` e crase, então substituição de comando é
+  recusada mesmo entre aspas duplas. Aspa não fechada também recusa.
+- 58 testes (7 novos), clippy limpo. **Nada foi afrouxado**: destrutivo continua
+  `Always`, escrita continua `Confirm`, e não existe modo yolo.
+
 ## 0.11.1 - O aviso do teto para de vazar JSON de protocolo na tela do usuário
 
 - A casca renderiza a string do `warn` na timeline, então `aviso_teto` do

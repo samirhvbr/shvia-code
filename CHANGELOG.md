@@ -3,6 +3,38 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.3 - O bump da 0.11.2 saiu pela metade, e o repo ganha a prova que o desktop já tinha
+
+- **O CASO (medido em 20/08/2026):** o commit da 0.11.2 (`3da7875`) levou
+  `CHANGELOG.md`, `src/tools.rs` e `version.md` — e **deixou `Cargo.toml` e
+  `Cargo.lock` em `0.11.1`**. O commit da 0.11.1 (`5cd3144`) tinha levado os cinco,
+  então não era desconhecimento do padrão: foi omissão silenciosa. Nada acusou —
+  árvore limpa, `cargo build` exit 0, e **o binário compilado respondendo `anna
+  0.11.1` com o código da 0.11.2**.
+- **Por que dói além da estética:** o `stage-anna.mjs` do SHVIA-DESKTOP decide o que
+  empacotar lendo `--version` do binário, e o *"Sobre → Motor do Code"* (desktop
+  1.1.25) mostra esse número **ao usuário** — entregue justamente porque a versão do
+  sidecar não aparecia em lugar nenhum. Bump pela metade faz ela aparecer **errada**,
+  que é pior que não aparecer: o número existe e mente.
+- **E havia um aviso que se dizia guarda.** O `Cargo.toml` trazia, na linha da versão,
+  o comentário *"O build-local.sh checa"*. **Não checava:** medido, todas as
+  referências a `version.md` naquele script são ao `version.md` do próprio desktop.
+  Não é só "aviso perde para gesto" — o aviso **afirmava ser** o gesto.
+- **Entra `build.rs` como a prova:** `version.md` (fonte) × `Cargo.toml`, e o build
+  **cai** nomeando o divergente. É `build.rs` e não `#[test]` porque o contrato é
+  *"os portadores concordam ou o build cai"* e `cargo build` não roda testes — teste
+  protege quem roda a suíte, `build.rs` protege quem só compila, que é o caminho do
+  `install.sh` e do empacotamento.
+- **Conferido por reversão, e o resultado corrigiu o próprio desenho.** Desalinhar o
+  `version.md` derruba com a lista dos divergentes (`Cargo.toml = 0.11.3`,
+  `Cargo.lock = 0.11.3`). Mas desalinhar **só o `Cargo.lock`** *passou* — porque o
+  `cargo build` **reescreve o lock em silêncio** a partir do `Cargo.toml` antes de
+  chamar o `build.rs`. **Quem guarda o lock é o `--locked`** (aborta com `cannot
+  update the lock file`, exit 101), e isso ficou escrito no `build.rs` em vez de
+  virar uma checagem que se anuncia e não age.
+- Portadores desta casa, agora explícitos: **`version.md`, `Cargo.toml`,
+  `Cargo.lock`** — os dois primeiros pelo `build.rs`, o terceiro por `--locked`.
+
 ## 0.11.2 - O gate de aprovação para de perguntar o que ele mesmo classifica como leitura
 
 - **O relato (19/08):** *"no modo Aprovação Auto está demandando muito ainda,

@@ -196,7 +196,8 @@ fn main() -> anyhow::Result<()> {
         let mut fe = json::JsonSink::new(non_interactive);
         let mut messages = vec![Message::system(project.system_prompt(host_mode))];
         if let Some(prompt) = cli.prompt {
-            run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), prompt);
+            // One-shot (`--json --prompt`): CLI não tem por onde passar imagem.
+            run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), prompt, vec![]);
         } else {
             // Persistente: o host manda {"type":"user","text":"..."} por linha.
             let mut line = String::new();
@@ -213,7 +214,16 @@ fn main() -> anyhow::Result<()> {
                 match v.get("type").and_then(|x| x.as_str()) {
                     Some("user") => {
                         let text = v.get("text").and_then(|x| x.as_str()).unwrap_or_default().to_string();
-                        run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), text);
+                        // `images`: base64 PURO, opcional. Item que não for string
+                        // é descartado em vez de virar `""` — base64 vazio chega ao
+                        // provedor como imagem corrompida, e o erro voltaria falando
+                        // de outra coisa.
+                        let images: Vec<String> = v
+                            .get("images")
+                            .and_then(|x| x.as_array())
+                            .map(|a| a.iter().filter_map(|i| i.as_str()).map(str::to_string).collect())
+                            .unwrap_or_default();
+                        run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), text, images);
                     }
                     Some("exit") => break,
                     _ => {}
@@ -427,6 +437,29 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Empurra o turno do usuário — e **apaga as imagens dos turnos anteriores**.
+///
+/// ⚠️ Por que a limpeza existe. O `anna` guarda o histórico em memória e reenvia
+/// a lista INTEIRA a cada volta do laço agêntico. Sem isto, uma figura colada uma
+/// vez subiria de novo em cada chamada de ferramenta, de todo turno seguinte, até
+/// a sessão acabar — num turno de código com 30 voltas isso é a mesma imagem paga
+/// 30 vezes, e ninguém veria: a resposta sai certa. O chat da casa não tem o
+/// problema porque monta `images` só no turno corrente (`ChatController:744`);
+/// aqui a lista é viva, então a regra precisa ser dita.
+///
+/// Dentro do turno a figura SOBREVIVE a todas as voltas, de propósito: o modelo
+/// precisa poder olhar a imagem outra vez depois de ler um arquivo.
+fn empurrar_turno_usuario(messages: &mut Vec<Message>, text: String, images: Vec<String>) {
+    for m in messages.iter_mut() {
+        m.images.clear();
+    }
+    messages.push(if images.is_empty() {
+        Message::user(text)
+    } else {
+        Message::user_com_imagens(text, images)
+    });
+}
+
 /// Uma volta no modo headless: empurra a pergunta, roda o loop, e erro vira evento.
 #[allow(clippy::too_many_arguments)]
 fn run_json_turn(
@@ -438,8 +471,9 @@ fn run_json_turn(
     tel: &mut Telemetry,
     runner: &mut dyn runner::ToolRunner,
     text: String,
+    images: Vec<String>,
 ) {
-    messages.push(Message::user(text));
+    empurrar_turno_usuario(messages, text, images);
     if let Err(e) = rt.block_on(agent::run_turn(cfg, messages, project, fe, tel, runner)) {
         fe.error(&e.to_string());
     }
@@ -534,5 +568,71 @@ fn print_config(cfg: &Config) {
     println!("elenco (/plano):");
     for (papel, perfil, esforco) in cfg.elenco_resolvido() {
         println!("  {papel:<10} {perfil}  ·  esforço {esforco}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// O corpo de um turno SEM imagem tem de sair byte a byte como saía antes de
+    /// a fatia existir — 100% dos turnos de hoje passam por aqui, e um campo a
+    /// mais no JSON mudaria o contrato de todo mundo por causa de um caso novo.
+    #[test]
+    fn turno_sem_imagem_nao_ganha_chave_nenhuma() {
+        let j = serde_json::to_string(&Message::user("oi")).unwrap();
+        assert_eq!(j, r#"{"role":"user","content":"oi"}"#);
+    }
+
+    /// E com imagem ela viaja como base64 PURO, na convenção que o gateway já
+    /// fala (`$entry['images']`) — sem mime, que os drivers derivam dos magic
+    /// bytes (`ImageMime::detect`).
+    #[test]
+    fn turno_com_imagem_leva_base64_puro() {
+        let j = serde_json::to_string(&Message::user_com_imagens("olha", vec!["QUJD".into()])).unwrap();
+        assert_eq!(j, r#"{"role":"user","content":"olha","images":["QUJD"]}"#);
+    }
+
+    /// A régua que impede a conta de crescer sozinha: turno novo apaga a figura
+    /// do turno velho. Sem ela a mesma imagem sobe em cada volta do laço, de
+    /// todo turno seguinte — e a resposta sai certa, então ninguém nota.
+    #[test]
+    fn turno_novo_apaga_a_imagem_do_turno_velho() {
+        let mut m = vec![
+            Message::system("s"),
+            Message::user_com_imagens("primeira", vec!["IMG1".into()]),
+            Message::assistant("respondi", vec![]),
+        ];
+        empurrar_turno_usuario(&mut m, "segunda".into(), vec![]);
+
+        assert_eq!(m.len(), 4);
+        assert!(m[1].images.is_empty(), "a figura do turno anterior tem de sair");
+        assert_eq!(m[1].content, "primeira", "o TEXTO do turno anterior fica — só a figura sai");
+        assert!(m[3].images.is_empty());
+    }
+
+    /// E o turno novo carrega a sua. Uma coisa não pode apagar a outra.
+    #[test]
+    fn o_turno_novo_carrega_a_figura_dele() {
+        let mut m = vec![Message::system("s"), Message::user_com_imagens("velha", vec!["IMG1".into()])];
+        empurrar_turno_usuario(&mut m, "nova".into(), vec!["IMG2".into()]);
+
+        assert!(m[1].images.is_empty());
+        assert_eq!(m[2].images, vec!["IMG2".to_string()]);
+    }
+
+    /// Item que não é string sai fora em vez de virar `""`: base64 vazio chega
+    /// ao provedor como imagem corrompida, e o erro voltaria falando de outra
+    /// coisa. É a leitura do stdin do host, transcrita.
+    #[test]
+    fn images_do_host_descarta_o_que_nao_e_string() {
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"type":"user","text":"x","images":["AAA",null,42,"BBB"]}"#).unwrap();
+        let images: Vec<String> = v
+            .get("images")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().filter_map(|i| i.as_str()).map(str::to_string).collect())
+            .unwrap_or_default();
+        assert_eq!(images, vec!["AAA".to_string(), "BBB".to_string()]);
     }
 }

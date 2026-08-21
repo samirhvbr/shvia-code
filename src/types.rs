@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 /// Uma mensagem do histórico. `content` sempre presente (mesmo vazio p/ um
 /// assistant que só chamou tools). `tool_call_id` só em `role="tool"`;
 /// `tool_calls` só em `role="assistant"`.
+///
+/// `images` é base64 PURO (sem o prefixo `data:`), a convenção do Ollama que o
+/// gateway já fala: `ChatService` monta `$entry['images']` assim, e os drivers
+/// Anthropic/OpenAI derivam o mime dos magic bytes (`ImageMime::detect`) — por
+/// isso o mime NÃO viaja aqui. `skip_serializing_if` mantém o corpo idêntico ao
+/// de antes em todo turno sem imagem, que é 100% dos turnos de hoje.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
@@ -15,20 +21,28 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into(), tool_call_id: None, tool_calls: vec![] }
+        Self { role: "system".into(), content: content.into(), tool_call_id: None, tool_calls: vec![], images: vec![] }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into(), tool_call_id: None, tool_calls: vec![] }
+        Self { role: "user".into(), content: content.into(), tool_call_id: None, tool_calls: vec![], images: vec![] }
+    }
+    /// Turno do usuário COM imagem. Separado do `user()` de propósito: o caminho
+    /// sem imagem é 100% dos turnos de hoje e não muda de assinatura por causa
+    /// de um caso novo.
+    pub fn user_com_imagens(content: impl Into<String>, images: Vec<String>) -> Self {
+        Self { role: "user".into(), content: content.into(), tool_call_id: None, tool_calls: vec![], images }
     }
     pub fn assistant(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
-        Self { role: "assistant".into(), content: content.into(), tool_call_id: None, tool_calls }
+        Self { role: "assistant".into(), content: content.into(), tool_call_id: None, tool_calls, images: vec![] }
     }
     pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: "tool".into(), content: content.into(), tool_call_id: Some(tool_call_id.into()), tool_calls: vec![] }
+        Self { role: "tool".into(), content: content.into(), tool_call_id: Some(tool_call_id.into()), tool_calls: vec![], images: vec![] }
     }
 }
 

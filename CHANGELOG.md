@@ -3,6 +3,37 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.4 - O turno do usuário passa a carregar imagem, e só o último turno a carrega
+
+- **O que entra no protocolo:** `images` em `role:"user"` — lista de **base64
+  puro**, sem o prefixo `data:`. É a convenção do Ollama que o gateway já falava
+  para o chat (`ChatService` monta `$entry['images']` assim), e os drivers de
+  nuvem derivam o mime dos **magic bytes** (`ImageMime::detect`), então o tipo
+  **não viaja**. Documentado em `docs/protocolo.md`.
+- **Turno sem imagem sai byte a byte como saía.** `skip_serializing_if` mantém a
+  chave fora do JSON quando a lista está vazia — e isso é 100% dos turnos de
+  hoje. Há régua travando o corpo exato (`turno_sem_imagem_nao_ganha_chave_nenhuma`).
+- **`api.rs` não mudou uma linha:** ele serializa `&[Message]` direto, então
+  campo novo na struct atravessa sozinho. O dimensionamento previa mexer lá;
+  medir encolheu a fatia.
+- ⚠️ **A conta que ia crescer sozinha, e o motivo de `empurrar_turno_usuario`
+  existir.** O `anna` guarda o histórico em MEMÓRIA e reenvia a lista inteira a
+  cada volta do laço agêntico. Se a figura ficasse presa ao turno que a trouxe,
+  ela subiria de novo em cada chamada de ferramenta, de todo turno seguinte, até
+  a sessão acabar — num turno de código com 30 voltas é a mesma imagem paga 30
+  vezes, **com a resposta saindo certa**. Defeito que ninguém audita porque nada
+  parece errado. Agora o turno novo apaga a figura do anterior e **mantém o texto
+  dele**; dentro do turno ela sobrevive a todas as voltas, de propósito, porque o
+  modelo precisa poder olhar a imagem outra vez depois de ler um arquivo.
+- **Item que não é string sai fora** em vez de virar `""`: base64 vazio chega ao
+  provedor como imagem corrompida, e o erro voltaria falando de outra coisa.
+- **Cinco réguas novas** (63 no total), conferidas por reversão: tirar o
+  `skip_serializing_if`, tirar a limpeza e fazer a limpeza levar o texto junto —
+  cada uma acendeu só a sua.
+- **Do outro lado:** `SHVIA-WEB` 2.102.39 (validação, teto do total, guarda de
+  visão e o repasse na allowlist do `CodeChatController`) e `SHVIA-DESKTOP`
+  1.1.31. Sem eles o campo viaja e o gateway o descarta.
+
 ## 0.11.3 - O bump da 0.11.2 saiu pela metade, e o repo ganha a prova que o desktop já tinha
 
 - **O CASO (medido em 20/08/2026):** o commit da 0.11.2 (`3da7875`) levou

@@ -27,7 +27,7 @@ X-API-Key: <chave do ShvIA>                # ou Authorization: Bearer <token>
 {
   "messages": [                     // obrigatório, 1..200
     { "role": "system",    "content": "..." },
-    { "role": "user",      "content": "..." },
+    { "role": "user",      "content": "...", "images": ["<base64 puro>"] },
     { "role": "assistant", "content": "...", "tool_calls": [ {"id","name","arguments"} ] },
     { "role": "tool",      "tool_call_id": "call_1", "content": "<resultado da ferramenta>" }
   ],
@@ -42,10 +42,36 @@ X-API-Key: <chave do ShvIA>                # ou Authorization: Bearer <token>
 }
 ```
 
-**Limites (recusa 422 acima):** `content` ≤ 200 000 chars; `tools` ≤ 32;
+**Limites (recusa 422 acima):** `content` ≤ 200 000 chars; `images` ≤ 8/mensagem,
+≤ 8 MB de base64 **cada** e ≤ 24 MB **somados na requisição** (o total é o que bate
+no `post_max_size` do PHP-FPM, e estourá-lo faz o corpo chegar VAZIO ao Laravel);
+`tools` ≤ 32;
 `tool_calls` ≤ 32/mensagem; `arguments` = array OU string JSON (o driver tolera
 os dois). **STATELESS:** o servidor não guarda conversa — o **histórico inteiro
 vai a cada volta** (as sessões são locais no CLI, D7).
+
+### Imagem no turno do usuário (0.11.4+)
+
+`images` é **opcional**, só existe em `role:"user"` e leva **base64 puro** — sem o
+prefixo `data:<mime>;base64,`. É a convenção do Ollama, que o gateway já falava
+para o chat (`ChatService` monta `$entry['images']` assim); os drivers de nuvem
+derivam o mime dos **magic bytes** (`ImageMime::detect`), então o tipo **não
+viaja**. Ausente e vazio são a mesma coisa: `skip_serializing_if` mantém o corpo
+byte a byte idêntico ao de antes em todo turno sem figura.
+
+⚠️ **Só o ÚLTIMO turno do usuário carrega imagem.** O `anna` guarda o histórico em
+memória e reenvia a lista inteira a cada volta do laço agêntico — se a figura
+ficasse presa ao turno velho, ela subiria de novo em cada chamada de ferramenta,
+de todo turno seguinte, até a sessão acabar. Num turno de código com 30 voltas é a
+mesma imagem paga 30 vezes, **com a resposta saindo certa** — o tipo de conta que
+ninguém audita porque nada parece errado. O turno novo apaga a figura do anterior
+e mantém o texto dele (`empurrar_turno_usuario`, `main.rs`). Dentro do turno a
+figura sobrevive a todas as voltas, de propósito: o modelo precisa poder olhar a
+imagem outra vez depois de ler um arquivo.
+
+⚠️ **O modelo precisa ter visão.** O gateway recusa com **422** e `{detail}` quando
+o alvo resolvido AFIRMA não aceitar imagem. Tri-estado: `null` (capability
+desconhecida) passa — o operador costuma saber o que selecionou.
 
 ### Formato das mensagens de ferramenta
 - **Assistente que chamou tools:** `role:"assistant"` + `tool_calls: [{id,name,arguments}]`

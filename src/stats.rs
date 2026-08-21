@@ -525,6 +525,7 @@ mod tests {
                     content: String::new(),
                     tool_call_id: None,
                     tool_calls: vec![],
+                    images: vec![],
                 })
                 .collect(),
             tokens: 100,

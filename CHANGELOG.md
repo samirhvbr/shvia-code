@@ -3,6 +3,12 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.6 - Nota do desligamento do COMMITTER passa a citar o T5
+
+- Correção de revisão do dono: a nota do `.committer.yml` cita o T5 pelo nome e o defeito
+  medido (scan de segredo des-stageando por assunto, 5/6 falso-positivo na 2.92.0). Desligar
+  tira o gatilho, não conserta o ADR-005 — quem religar precisa saber disso.
+
 ## 0.11.5 - Desliga o COMMITTER (kill-switch, a pedido do dono)
 
 - `enabled: false` no `.committer.yml` — o kill-switch da SPEC §1.2, sem apagar o marcador.

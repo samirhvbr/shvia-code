@@ -3,6 +3,13 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.5 - Desliga o COMMITTER (kill-switch, a pedido do dono)
+
+- `enabled: false` no `.committer.yml` — o kill-switch da SPEC §1.2, sem apagar o marcador.
+- Desligado em toda a casa `x/SHVIA/*` em 29/08/2026: passou a haver agente mandando PR, e
+  commit automático concorrendo com PR embaralha a história. Commit e push voltam a ser do
+  agente da sessão.
+
 ## 0.11.4 - O turno do usuário passa a carregar imagem, e só o último turno a carrega
 
 - **O que entra no protocolo:** `images` em `role:"user"` — lista de **base64

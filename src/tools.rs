@@ -18,11 +18,43 @@ use globset::Glob;
 use ignore::WalkBuilder;
 use serde_json::json;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 const MAX_BYTES: usize = 64 * 1024;
 const MAX_HITS: usize = 200;
 const MAX_OUTPUT: usize = 32 * 1024;
+
+/// Teto de tempo do `bash`, em segundos. `0` desliga o teto.
+///
+/// ## Por que existe (achado F-04 da revisão de 01/09/2026)
+///
+/// A doc prometia timeout em dois lugares (`docs/ferramentas.md`, `docs/arquitetura-cli.md`)
+/// e o código chamava `output()`, que **espera para sempre**. Um `tail -f`, um `sleep`, um
+/// `npm run dev` ou um `cargo test` que trava congelam o turno inteiro.
+///
+/// No REPL o dev vê e faz Ctrl-C. No host NDJSON — a casca do SHVIA-DESKTOP — a sessão
+/// simplesmente **emudece**, e o único remédio é matar o sidecar, o que perde a sessão. Era
+/// esse o custo real: não "o comando demora", e sim "a única saída perde o trabalho".
+pub(crate) const TIMEOUT_BASH_PADRAO_S: u64 = 120;
+static TIMEOUT_BASH_S: OnceLock<u64> = OnceLock::new();
+
+/// Define o teto do `bash` a partir da config. Chamado uma vez, no arranque.
+///
+/// Mesmo padrão do `memory::init`: a config não desce por parâmetro até aqui porque
+/// `tools::run` é chamado de três lugares (runner local, host NDJSON, orquestrador) e
+/// enfiar um campo novo na assinatura dos três para carregar um número seria pior.
+pub fn configurar_timeout_bash(segundos: u64) {
+    let _ = TIMEOUT_BASH_S.set(segundos);
+}
+
+fn timeout_bash() -> Option<Duration> {
+    match *TIMEOUT_BASH_S.get_or_init(|| TIMEOUT_BASH_PADRAO_S) {
+        0 => None,
+        s => Some(Duration::from_secs(s)),
+    }
+}
 
 /// Defs enviadas ao modelo (`tools[]` do protocolo).
 pub fn defs() -> Vec<ToolDef> {
@@ -307,19 +339,126 @@ fn bash(root: &Path, command: &str, why: &str, id: &str, fe: &mut dyn Frontend) 
     if is_destructive(command) {
         crate::checkpoint::snapshot(root, &format!("bash destrutivo: {}", cap(command, 60)));
     }
-    match Command::new("sh").arg("-c").arg(command).current_dir(root).output() {
-        Ok(o) => {
-            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
-            let err = String::from_utf8_lossy(&o.stderr);
-            if !err.trim().is_empty() {
-                s.push_str("\n[stderr]\n");
-                s.push_str(&err);
-            }
-            let code = o.status.code().unwrap_or(-1);
-            format!("{}\n[exit {code}]", cap(&s, MAX_OUTPUT))
-        }
-        Err(e) => format!("ERRO: falha ao executar: {e}"),
+    executar_bash(root, command, timeout_bash())
+}
+
+/// Roda o comando com teto de tempo, matando o GRUPO de processos se estourar.
+///
+/// ## Por que grupo, e não só o filho (achado F-04)
+///
+/// O filho é o `sh -c`. Quem trava é quase sempre o neto: o `node` do `npm run dev`, o
+/// binário de teste do `cargo test`. Matar só o `sh` deixaria o neto vivo, segurando o pipe
+/// — e a leitura da saída ficaria pendurada exatamente como antes, com a diferença de agora
+/// mentir que houve timeout. `process_group(0)` põe todos no mesmo grupo e um sinal alcança
+/// a árvore inteira.
+///
+/// ## Por que threads para ler a saída
+///
+/// O pipe do SO tem tamanho fixo (64 KB no Linux). Um comando que escreve mais que isso
+/// **bloqueia na escrita** enquanto ninguém lê. Se esperássemos o processo terminar para só
+/// então ler, um comando falante travaria — e o timeout "consertaria" matando um processo
+/// que estava saudável. As duas threas drenam os pipes enquanto o comando corre.
+fn executar_bash(root: &Path, command: &str, teto: Option<Duration>) -> String {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(command)
+        .current_dir(root)
+        // `stdin` nulo: o `output()` já garantia isso, e mantê-lo é o que impede um
+        // comando interativo de engolir o protocolo NDJSON do host.
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
     }
+
+    let mut filho = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return format!("ERRO: falha ao executar: {e}"),
+    };
+
+    let saida = filho.stdout.take().map(ler_em_thread);
+    let erro = filho.stderr.take().map(ler_em_thread);
+
+    let estourou = match teto {
+        None => {
+            let _ = filho.wait();
+            false
+        }
+        Some(t) => esperar_ou_matar(&mut filho, t),
+    };
+
+    let code = filho.wait().ok().and_then(|st| st.code()).unwrap_or(-1);
+    let mut s = saida.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+    let err = erro.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+    if !err.trim().is_empty() {
+        s.push_str("\n[stderr]\n");
+        s.push_str(&err);
+    }
+    if estourou {
+        // A mensagem é para o MODELO, e por isso diz o que fazer: sem o "rode em
+        // background", ele tenta o mesmo comando de novo e gasta outro teto inteiro.
+        let seg = teto.map(|t| t.as_secs()).unwrap_or(0);
+        return format!(
+            "{}\nERRO: timeout de {seg}s — o comando foi encerrado (grupo de processos morto).\n             Se ele é de longa duração (servidor, `tail -f`, watch), rode-o em background e \
+             leia a saída depois, ou aumente `bash_timeout` no config.",
+            cap(&s, MAX_OUTPUT)
+        );
+    }
+    format!("{}\n[exit {code}]", cap(&s, MAX_OUTPUT))
+}
+
+/// Drena um pipe numa thread — ver o porquê no docblock de [`executar_bash`].
+fn ler_em_thread<R: std::io::Read + Send + 'static>(mut r: R) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut r, &mut buf);
+        String::from_utf8_lossy(&buf).into_owned()
+    })
+}
+
+/// Espera o filho até o teto. Devolve `true` se estourou (e matou).
+fn esperar_ou_matar(filho: &mut Child, teto: Duration) -> bool {
+    let limite = Instant::now() + teto;
+    loop {
+        match filho.try_wait() {
+            Ok(Some(_)) => return false,
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+        if Instant::now() >= limite {
+            matar_grupo(filho);
+            return true;
+        }
+        // 50 ms: o suficiente para não virar espera ocupada e curto o bastante para o
+        // teto valer o que diz. Um comando que termina não espera mais que isso.
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(unix)]
+fn matar_grupo(filho: &mut Child) {
+    // `kill -KILL -<pgid>` alcança a árvore. Usa o binário `kill` em vez da `libc` para
+    // não acrescentar dependência por causa de uma chamada — a casa já usa `Command` para
+    // `git` e `sh`, e este caminho só roda quando algo já deu errado.
+    let pgid = filho.id();
+    let _ = Command::new("kill")
+        .arg("-KILL")
+        .arg(format!("-{pgid}"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    // Cinto e suspensório: se o grupo não existir mais (ou o `kill` faltar), o filho
+    // ainda morre. Sem isto, um `kill` ausente no PATH deixaria o processo vivo.
+    let _ = filho.kill();
+}
+
+#[cfg(not(unix))]
+fn matar_grupo(filho: &mut Child) {
+    // Sem grupo de processos portátil aqui; mata o filho direto.
+    let _ = filho.kill();
 }
 
 /// Política do comando: destrutivo (Always) > allowlist simples (Auto) > Confirm.
@@ -333,17 +472,224 @@ fn classify(cmd: &str) -> Policy {
     }
 }
 
-fn is_destructive(cmd: &str) -> bool {
-    let c = cmd.to_lowercase();
-    c.contains("rm -rf") || c.contains("rm -fr") || c.contains("rm -r -f")
-        || c.contains("git push")
-        || c.contains("git reset --hard")
-        || c.contains("git clean -fd") || c.contains("git clean -df")
-        || c.contains("mkfs") || c.starts_with("dd ") || c.contains(" dd ")
-        || c.contains("chmod -r 777") || c.contains("chmod 777 -r")
-        || c.contains("| sh") || c.contains("| bash") || c.contains("|sh") || c.contains("|bash")
+/// Separa a linha em SEGMENTOS de comando por `;`, `|`, `||`, `&&` e nova linha,
+/// respeitando aspas — para o `is_destructive` classificar cada comando por si.
+///
+/// Diferente do [`dividir_por_and`], que recusa (`None`) qualquer coisa fora de `&&`.
+/// Aquele decide se tudo é leitura, e ali recusar é o lado seguro. Aqui a pergunta é
+/// "algum destes comandos é perigoso?", e recusar significaria **não olhar** — então
+/// este divide o que der e devolve os pedaços. Redireção (`>`) não separa comando:
+/// ela e o alvo ficam no mesmo segmento, e é assim que tem de ser.
+fn segmentos_de_comando(cmd: &str) -> Vec<String> {
+    let mut segs = Vec::new();
+    let mut atual = String::new();
+    let mut aspa: Option<char> = None;
+    let mut it = cmd.chars().peekable();
+    while let Some(ch) = it.next() {
+        match aspa {
+            Some(a) => {
+                if ch == a {
+                    aspa = None;
+                }
+                atual.push(ch);
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    aspa = Some(ch);
+                    atual.push(ch);
+                }
+                ';' | '\n' | '|' | '&' => {
+                    // `||` e `&&` são dois caracteres; consome o par sem gerar segmento vazio.
+                    if it.peek() == Some(&ch) {
+                        it.next();
+                    }
+                    segs.push(std::mem::take(&mut atual));
+                }
+                // Substituição de comando: o miolo é comando de verdade e vai ser
+                // classificado junto. `$(rm -rf /)` não pode escapar por ser argumento.
+                '`' | '(' | ')' => segs.push(std::mem::take(&mut atual)),
+                '$' if it.peek() == Some(&'(') => {
+                    it.next();
+                    segs.push(std::mem::take(&mut atual));
+                }
+                c => atual.push(c),
+            },
+        }
+    }
+    segs.push(atual);
+    segs.into_iter().filter(|s| !s.trim().is_empty()).collect()
+}
+
+/// Prefixos que não são o comando de verdade — `sudo rm -rf /` é `rm -rf /`.
+///
+/// `env` some junto com as atribuições que o precedem (`FOO=1 rm -rf x`), e por isso
+/// o laço abaixo também descarta qualquer token no formato `CHAVE=valor` antes do
+/// comando: é a forma padrão do shell, e ignorá-la deixaria a guarda cega para ela.
+///
+/// `xargs` entra porque `cat lista | xargs rm -rf` apaga tudo que estiver na lista, e
+/// só o `xargs` aparece na posição de comando.
+const PREFIXOS_TRANSPARENTES: &[&str] = &[
+    "sudo", "doas", "env", "command", "nohup", "time", "exec", "xargs",
+];
+
+/// Opções DESSES prefixos que levam valor num token separado.
+///
+/// Sem esta lista, `sudo -u root rm -rf /` pararia em `root` como se fosse o comando —
+/// a guarda enxergaria um comando inofensivo e deixaria passar. Modelar opção com valor
+/// é chato e é o que faz a diferença entre pular o prefixo e pular o alvo.
+const OPCOES_COM_VALOR: &[&str] = &[
+    "-u", "-g", "-p", "-t", "-c", "-r", "-h", // sudo/doas
+    "-n", "-i", "-p", "-d", "-a", "-s", "-e", "-l", "-i{}", // xargs
+];
+
+/// O comando e os argumentos de um segmento, sem os prefixos transparentes.
+/// `None` quando não sobra comando nenhum (`sudo` sozinho, atribuições só).
+fn comando_e_args(seg: &str) -> Option<(String, Vec<String>)> {
+    let toks = tokens(seg);
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i].to_lowercase();
+        // `CHAVE=valor` antes do comando é atribuição de ambiente, não o comando.
+        let atribuicao = t
+            .split_once('=')
+            .is_some_and(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        if atribuicao {
+            i += 1;
+            continue;
+        }
+        if PREFIXOS_TRANSPARENTES.contains(&t.as_str()) {
+            i += 1;
+            // …e as opções DELE, pulando o valor quando a opção levar um.
+            while i < toks.len() && toks[i].starts_with('-') {
+                let opc = toks[i].to_lowercase();
+                i += 1;
+                if OPCOES_COM_VALOR.contains(&opc.as_str()) && i < toks.len() {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        break;
+    }
+    let cmd = toks.get(i)?.to_lowercase();
+    // Só o nome do executável: `/bin/rm` e `./rm` são `rm`.
+    let nome = cmd.rsplit(['/', '\\']).next().unwrap_or(&cmd).to_string();
+    Some((nome, toks[i + 1..].to_vec()))
+}
+
+/// Alguma flag curta agrupada (`-rf`) ou longa contém a letra/nome procurado?
+///
+/// `-rf` é UM token com duas flags dentro, e era assim que `rm -r --force build`
+/// escapava: a busca por substring procurava a grafia `rm -rf` e não a semântica.
+/// Para aqui, `-rf`, `-r -f`, `-fr` e `--recursive --force` são a mesma coisa.
+fn tem_flag(args: &[String], curta: char, longas: &[&str]) -> bool {
+    args.iter().any(|a| {
+        let a = a.to_lowercase();
+        if let Some(l) = a.strip_prefix("--") {
+            // `--force=x` também conta.
+            let nome = l.split('=').next().unwrap_or(l);
+            return longas.contains(&nome);
+        }
+        if let Some(curtas) = a.strip_prefix('-') {
+            return !curtas.is_empty() && curtas.chars().all(|c| c.is_ascii_alphanumeric()) && curtas.contains(curta);
+        }
+        false
+    })
+}
+
+/// O subcomando do `git`, pulando as opções globais.
+///
+/// `-C <dir>`, `-c k=v` e `--git-dir <x>` levam VALOR: sem pular o valor junto, o
+/// primeiro não-opção encontrado seria o diretório, e `git -C outro push` viraria
+/// subcomando `outro`. Era assim que ele escapava para `Confirm`.
+fn git_subcomando(args: &[String]) -> Option<(String, &[String])> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].to_lowercase();
+        if matches!(a.as_str(), "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path") {
+            i += 2;
+            continue;
+        }
+        if a.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return Some((a, &args[i + 1..]));
+    }
+    None
+}
+
+/// Padrões que são da LINHA INTEIRA, não de um comando — pipe para shell, fork
+/// bomb, SQL destrutivo dentro de um `-c "..."`. Ficam por substring de propósito:
+/// aqui a forma textual É o padrão.
+fn padrao_de_linha_destrutivo(c: &str) -> bool {
+    c.contains("| sh") || c.contains("| bash") || c.contains("|sh") || c.contains("|bash")
         || c.contains("drop table") || c.contains("truncate table")
+        || c.contains("drop database")
         || c.contains(":(){")
+}
+
+/// Este comando merece `Policy::Always` — perguntar SEMPRE, sem "t/Sempre"?
+///
+/// ## Por que tokenizado (achado F-05 da revisão de 01/09/2026)
+///
+/// A versão anterior procurava substrings: `c.contains("rm -rf")`. Isso classifica pela
+/// **grafia**, e o shell tem muitas grafias para a mesma coisa. Passavam batido, caindo em
+/// `Confirm`: `rm -r --force build`, `git -C outro push`, `sudo rm -rf /`, `FOO=1 rm -rf x`,
+/// `/bin/rm -rf x`, `git reset -C x --hard`.
+///
+/// O dano não é o comando rodar sem ninguém ver — em `Confirm` ele ainda pergunta. É que em
+/// `Confirm` o **"t/Sempre" vale**, e é exatamente isso que `Always` existe para impedir.
+/// Uma vez que o dev responde "sempre" para um `rm -r --force`, a próxima vez não pergunta.
+///
+/// ## A decisão de tratar `-r` sozinho como destrutivo
+///
+/// `rm -r build` sem `-f` some com uma árvore inteira igual. A versão por substring exigia a
+/// dupla porque procurava a grafia `rm -rf`; classificar por semântica torna a pergunta
+/// "isto apaga recursivamente?", e a resposta não depende do `-f`. O custo de errar para o
+/// lado estrito é **uma confirmação a mais**; para o outro lado, é uma árvore apagada com
+/// "sempre" memorizado.
+fn is_destructive(cmd: &str) -> bool {
+    let baixo = cmd.to_lowercase();
+    if padrao_de_linha_destrutivo(&baixo) {
+        return true;
+    }
+    segmentos_de_comando(cmd).iter().any(|seg| segmento_destrutivo(seg))
+}
+
+fn segmento_destrutivo(seg: &str) -> bool {
+    let Some((cmd, args)) = comando_e_args(seg) else {
+        return false;
+    };
+    match cmd.as_str() {
+        // Recursivo é o gatilho, com ou sem `--force` (ver o docblock acima).
+        "rm" => tem_flag(&args, 'r', &["recursive", "dir"]),
+        // Formatar disco: qualquer `mkfs`, inclusive `mkfs.ext4`.
+        c if c.starts_with("mkfs") => true,
+        "dd" => true,
+        "chmod" => tem_flag(&args, 'r', &["recursive"]) && args.iter().any(|a| a.contains("777")),
+        "git" => match git_subcomando(&args) {
+            Some((sub, resto)) => match sub.as_str() {
+                "push" => true,
+                "reset" => resto.iter().any(|a| a.eq_ignore_ascii_case("--hard")),
+                // `git clean` sem `-f` não apaga nada (o próprio git recusa), então a
+                // força é o gatilho — e cobre `-fd`, `-df`, `-f -d` e `--force` de uma vez.
+                "clean" => tem_flag(resto, 'f', &["force"]),
+                // ⚠️ `git branch -D` NÃO entra: o achado lista push/reset --hard/clean, a
+                // casa já o testa como `Confirm`, e branch local apagada volta pelo reflog.
+                _ => false,
+            },
+            None => false,
+        },
+        // ⚠️ `find … -delete`, `shred`, `chown -R`, `mkswap` NÃO entram aqui, e a
+        // ausência é decisão, não esquecimento. Este achado (F-05) pede para trocar a
+        // classificação por SUBSTRING por classificação por TOKEN — não para ampliar o
+        // conjunto do que é destrutivo. `find -delete` já é `Confirm` por decisão
+        // registrada da casa (`find_so_e_leitura_enquanto_nao_escreve`), e promovê-lo
+        // aqui seria mudar comportamento decidido a reboque de outro conserto.
+        // Fica anotado na revisão como pergunta ao dono, não como mudança minha.
+        _ => false,
+    }
 }
 
 /// Comandos de LEITURA que rodam sem perguntar (regra do produto: "leitura = auto").
@@ -360,7 +706,7 @@ const ALLOWLIST: &[&str] = &[
     "ls", "cat", "pwd", "echo", "head", "tail", "wc", "file", "cd", "stat",
     "tree", "du", "df", "basename", "dirname", "realpath", "readlink",
     // Busca e filtro (o grosso do que faltava)
-    "grep", "egrep", "fgrep", "rg", "ag", "awk", "cut", "sort", "uniq", "nl",
+    "grep", "egrep", "fgrep", "rg", "ag", "cut", "sort", "uniq", "nl",
     "diff", "jq", "column", "tr", "which", "type", "command -v",
     // Git só-leitura
     "git status", "git diff", "git log", "git show", "git branch",
@@ -381,14 +727,55 @@ const ALLOWLIST: &[&str] = &[
 /// sed de verdade. A opção era uma guarda que ou deixa passar escrita, ou reprova
 /// `/warn/p` e volta a encher o dev de pergunta. Guarda incompleta em gate de
 /// segurança é pior que ausência de guarda, então `sed` continua pedindo
-/// aprovação — e quem quer intervalo de linhas tem `head`, `tail` e `awk`, todos
-/// aqui e sem essa ambiguidade.
+/// aprovação.
+///
+/// 🔴 **E o `awk` SAIU do `Auto` em 02/09/2026, pelo MESMO critério** (achado F-03). Ele
+/// estava aqui como a alternativa sem ambiguidade ao `sed` — e não é: `system("…")` executa
+/// comando, `print > "arquivo"` grava, `| "cmd"` pipa, tudo **dentro do programa**, que é
+/// texto entre aspas e portanto invisível para o scanner de metacaractere. Distinguir
+/// `print > "f"` de `NR >= 37` é exatamente a ambiguidade do `w` do sed — e esta casa já
+/// tropeçou nela: o comentário do `dividir_por_and` registra o dia em que um `contains('>')`
+/// ingênuo recusou `awk 'NR>=37 && NR<=46'`. Uma guarda parcial aqui erraria dos dois lados.
+///
+/// O que se perde: uma confirmação por `awk`. O que fica em `Auto` para ler intervalo e
+/// coluna: `head`, `tail`, `nl`, `cut`, `grep -n`.
+///
+/// **`npm run <script>`, `cargo build/test` e `make test` continuam em `Auto`, e isso é uma
+/// DECISÃO, não um esquecimento:** eles executam o que está declarado no projeto que o dev
+/// abriu (`package.json`, `Cargo.toml`, `Makefile`). Um prompt injetado não muda esses
+/// arquivos sem passar por `write_file`/`edit_file`, que têm cartão. Em uma frase: **o dev
+/// confia no `package.json` do próprio projeto.** Quem não quiser esse contrato tira as
+/// quatro entradas desta lista — é uma linha, e o efeito é uma confirmação por build.
 fn leitura_condicional(seg: &str) -> Option<bool> {
     let c = seg.trim();
     if c == "find" || c.starts_with("find ") {
         let mau = c.contains("-delete") || c.contains("-exec") || c.contains("-ok")
             || c.contains("-fprint") || c.contains("-fls");
         return Some(!mau);
+    }
+    // `git branch` era prefixo, e prefixo não distingue LER de APAGAR: `git branch -D main`
+    // saía em `Auto`. Só as formas de leitura seguem automáticas (achado F-03).
+    if c == "git branch" || c.starts_with("git branch ") {
+        const LEITURA: &[&str] = &[
+            "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list",
+            "--show-current", "--merged", "--no-merged", "--contains", "--no-contains",
+            "--sort", "--format", "-i", "--color", "--no-color",
+        ];
+        return Some(tokens(c).into_iter().skip(2).all(|t| {
+            let chave = t.split('=').next().unwrap_or("").to_string();
+            // Nome de branch como argumento de `--merged`/`--contains` é leitura; o que
+            // decide é não haver flag de escrita. Só flags são conferidas.
+            !chave.starts_with('-') || LEITURA.contains(&chave.as_str())
+        }));
+    }
+    // `sort -o saida` e `uniq entrada saida` ESCREVEM — os dois estavam em `Auto` pelo
+    // nome, e o nome não diz que o segundo posicional é destino.
+    if c == "sort" || c.starts_with("sort ") {
+        return Some(!tokens(c).iter().skip(1).any(|t| t == "-o" || t.starts_with("--output")));
+    }
+    if c == "uniq" || c.starts_with("uniq ") {
+        let posicionais = tokens(c).into_iter().skip(1).filter(|t| !t.starts_with('-')).count();
+        return Some(posicionais <= 1);
     }
     None
 }
@@ -454,9 +841,112 @@ fn dividir_por_and(cmd: &str) -> Option<Vec<String>> {
     Some(segs)
 }
 
+/// Tokens do segmento, com as aspas resolvidas — `cat '.env'` e `cat ".env"` dão o mesmo
+/// token que `cat .env`. Escapar de aspas era o caminho mais óbvio para driblar a guarda
+/// de argumento abaixo, e por isso ela não olha a string crua.
+fn tokens(seg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut atual = String::new();
+    let mut aspa: Option<char> = None;
+    let mut tem = false;
+    for ch in seg.chars() {
+        match aspa {
+            Some(a) => {
+                if ch == a {
+                    aspa = None;
+                } else {
+                    atual.push(ch);
+                }
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    aspa = Some(ch);
+                    tem = true;
+                }
+                c if c.is_whitespace() => {
+                    if tem || !atual.is_empty() {
+                        out.push(std::mem::take(&mut atual));
+                        tem = false;
+                    }
+                }
+                c => atual.push(c),
+            },
+        }
+    }
+    if tem || !atual.is_empty() {
+        out.push(atual);
+    }
+    out
+}
+
+/// `..` que sai da raiz, lexicamente (sem tocar no disco: o caminho pode não existir, e
+/// perguntar ao FS aqui faria um `ls pasta-que-vou-criar` pedir aprovação sem motivo).
+fn escapa_da_raiz(tok: &str) -> bool {
+    let mut prof: i32 = 0;
+    for parte in tok.split('/') {
+        match parte {
+            "" | "." => {}
+            ".." => {
+                prof -= 1;
+                if prof < 0 {
+                    return true;
+                }
+            }
+            _ => prof += 1,
+        }
+    }
+    false
+}
+
+/// 🔴 O argumento é um caminho que este gate NÃO consegue dar por seguro?
+///
+/// **Achado F-02 da revisão de 01/09/2026, e ele é o defeito que mais doeu ler:** a
+/// `ALLOWLIST` era conferida só pelo **prefixo** do comando, e nunca pelos argumentos. O
+/// `read_file` recusa `.env` pela `guard::denied` desde sempre — e `cat .env` saía em
+/// `Policy::Auto`, sem cartão nenhum. A mesma trava que a tool de leitura respeita era
+/// contornável pelo `bash` ao lado dela, com o mesmo modelo escolhendo o caminho.
+///
+/// O que ela recusa (rebaixando o segmento para `Confirm`, não bloqueando):
+///
+///  - qualquer token na **denylist de segredos** (`guard::denied`): `.env`, `*.pem`, `id_rsa*`,
+///    `credentials`, `/.ssh/`, `/.aws/`, `.git/` — a mesma lista das tools de arquivo;
+///  - caminho **absoluto** (`/etc/...`) ou de **home** (`~/...`): fora da raiz do projeto;
+///  - `..` que **escapa** da raiz;
+///  - caminho com **expansão de variável** (`$HOME/x`, `"$dir/y"`): o valor só existe na hora,
+///    então não há o que conferir. `grep "$padrao" arquivo` continua passando — o token do
+///    padrão não parece caminho.
+///
+/// **O que ela NÃO fecha, e fica escrito em vez de mascarado:** busca recursiva
+/// (`grep -r X .`, `rg X`) segue em `Auto` e pode imprimir uma linha de dentro de um `.env`
+/// que esteja no projeto. Fechar isso exigiria decidir por conteúdo, não por caminho — é
+/// outra guarda, com outro custo, e prometer que esta cobre aquilo seria a mentira que o
+/// comentário do `sed` logo acima existe para não repetir.
+fn argumento_de_caminho_recusado(seg: &str) -> Option<String> {
+    for tok in tokens(seg).into_iter().skip(1) {
+        if tok.starts_with('-') {
+            continue; // flag, não caminho
+        }
+        let parece_caminho = tok.starts_with('~') || tok.starts_with('.') || tok.contains('/');
+        if crate::guard::denied(&tok) {
+            return Some(tok);
+        }
+        if !parece_caminho {
+            continue; // padrão, glob, nome de script — não é caminho
+        }
+        if tok.starts_with('/') || tok.starts_with('~') || tok.contains('$') || escapa_da_raiz(&tok) {
+            return Some(tok);
+        }
+    }
+    None
+}
+
 fn segmento_permitido(seg: &str) -> bool {
     let c = seg.trim();
     if c.is_empty() {
+        return false;
+    }
+    // Antes da lista: nenhum comando de leitura é `Auto` se o ARGUMENTO não for defensável.
+    if argumento_de_caminho_recusado(c).is_some() {
         return false;
     }
     if let Some(ok) = leitura_condicional(c) {
@@ -534,6 +1024,232 @@ fn git_commit(root: &Path, message: &str, add_all: bool, id: &str, fe: &mut dyn 
 
 #[cfg(test)]
 mod tests {
+
+    // ── F-04: teto de tempo do bash ─────────────────────────────────────────
+
+    #[test]
+    fn comando_rapido_passa_inteiro_pelo_teto() {
+        let dir = sandbox();
+        let out = executar_bash(&dir, "echo ola", Some(Duration::from_secs(10)));
+        assert!(out.contains("ola"), "saída: {out}");
+        assert!(out.contains("[exit 0]"), "saída: {out}");
+        assert!(!out.contains("timeout"), "saída: {out}");
+    }
+
+    #[test]
+    fn comando_que_trava_e_morto_no_teto() {
+        let dir = sandbox();
+        let t0 = Instant::now();
+        let out = executar_bash(&dir, "sleep 30", Some(Duration::from_millis(300)));
+        let gasto = t0.elapsed();
+        assert!(out.contains("timeout de 0s") || out.contains("ERRO: timeout"), "saída: {out}");
+        // O ponto é ele VOLTAR. Antes deste conserto esta linha nunca retornava.
+        assert!(gasto < Duration::from_secs(5), "demorou {gasto:?} — o teto não cortou");
+    }
+
+    #[test]
+    fn o_neto_morre_junto_com_o_pai() {
+        // 🔴 A prova que separa "matei o `sh`" de "matei a árvore". O `sh -c` sobe um
+        // filho que dorme e sai de cena; matar só o `sh` deixaria o neto vivo segurando
+        // o pipe — e a leitura da saída ficaria pendurada exatamente como antes.
+        let dir = sandbox();
+        let marca = dir.join("neto.pid");
+        let cmd = format!(
+            "sh -c 'echo $$ > {}; sleep 30' & wait",
+            marca.display()
+        );
+        let t0 = Instant::now();
+        let out = executar_bash(&dir, &cmd, Some(Duration::from_millis(500)));
+        assert!(out.contains("ERRO: timeout"), "saída: {out}");
+        assert!(t0.elapsed() < Duration::from_secs(5), "não voltou a tempo");
+
+        // O neto tem de estar morto. `kill -0` responde se o processo existe.
+        let pid = std::fs::read_to_string(&marca).unwrap_or_default().trim().to_string();
+        assert!(!pid.is_empty(), "o neto nem chegou a nascer — o teste não mede nada");
+        std::thread::sleep(Duration::from_millis(200));
+        let vivo = Command::new("kill")
+            .arg("-0")
+            .arg(&pid)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|st| st.success())
+            .unwrap_or(false);
+        assert!(!vivo, "o neto {pid} sobreviveu — o kill não alcançou o grupo");
+    }
+
+    #[test]
+    fn saida_grande_nao_trava_o_pipe() {
+        // Sem as threads de leitura, um comando que escreve mais que o buffer do pipe
+        // (64 KB no Linux) bloqueia na escrita e o teto o mataria como se estivesse
+        // travado — "consertando" um processo saudável.
+        let dir = sandbox();
+        let out = executar_bash(&dir, "yes abcdefgh | head -c 300000", Some(Duration::from_secs(20)));
+        assert!(!out.contains("ERRO: timeout"), "matou um comando que só era falante");
+        assert!(out.contains("[exit 0]"), "saída: {}", &out[..out.len().min(200)]);
+        assert!(out.contains("saída cortada"), "o corte em MAX_OUTPUT continua valendo");
+    }
+
+    #[test]
+    fn teto_zero_desliga_o_corte() {
+        let dir = sandbox();
+        let out = executar_bash(&dir, "echo sem-teto", None);
+        assert!(out.contains("sem-teto") && out.contains("[exit 0]"), "saída: {out}");
+    }
+
+    #[test]
+    fn stderr_e_codigo_de_saida_continuam_chegando() {
+        let dir = sandbox();
+        let out = executar_bash(&dir, "echo erro >&2; exit 3", Some(Duration::from_secs(10)));
+        assert!(out.contains("[stderr]") && out.contains("erro"), "saída: {out}");
+        assert!(out.contains("[exit 3]"), "saída: {out}");
+    }
+
+    // ── F-05: is_destructive tokenizado ─────────────────────────────────────
+    //
+    // Achado F-05 da revisão de 01/09/2026. Cada caso aqui é uma grafia que a versão
+    // por substring deixava cair em `Confirm` — onde o "t/Sempre" vale, que é
+    // exatamente o que `Always` existe para impedir.
+
+    #[test]
+    fn destrutivo_pega_as_variantes_de_flag_que_a_substring_perdia() {
+        // A grafia procurada era literalmente "rm -rf". Estas são o mesmo comando.
+        for c in [
+            "rm -rf build",
+            "rm -fr build",
+            "rm -r -f build",
+            "rm -r --force build",   // o exemplo do achado
+            "rm --recursive build",
+            "rm -Rf build",
+            "rm -rv build",          // recursivo com verbose no mesmo token
+        ] {
+            assert!(is_destructive(c), "deveria ser destrutivo: {c}");
+        }
+    }
+
+    #[test]
+    fn destrutivo_atravessa_prefixo_e_caminho() {
+        for c in [
+            "sudo rm -rf /",
+            "doas rm -rf x",
+            "FOO=1 rm -rf x",           // atribuição de ambiente antes do comando
+            "env FOO=1 rm -rf x",
+            "/bin/rm -rf x",            // caminho absoluto
+            "./rm -rf x",
+            "nohup rm -rf x",
+        ] {
+            assert!(is_destructive(c), "deveria ser destrutivo: {c}");
+        }
+    }
+
+    #[test]
+    fn destrutivo_pega_git_com_opcao_global() {
+        for c in [
+            "git push",
+            "git -C outro push",                  // o exemplo do achado
+            "git -c user.name=x push origin main",
+            "git --git-dir /tmp/x push",
+            "git reset --hard",
+            "git -C x reset --hard HEAD~1",
+            "git clean -fd",
+            "git clean -df",
+            "git clean --force",
+            "git clean -f -d",
+        ] {
+            assert!(is_destructive(c), "deveria ser destrutivo: {c}");
+        }
+    }
+
+    #[test]
+    fn destrutivo_classifica_por_segmento() {
+        // O perigoso pode estar no meio de uma composição — inclusive dentro de
+        // substituição de comando, onde ele nem parece um comando.
+        for c in [
+            "cd build && rm -rf .",
+            "ls; rm -rf x",
+            "cat a | xargs rm -rf",
+            "echo $(rm -rf /tmp/x)",
+            "echo `git push`",
+            "false || git push",
+        ] {
+            assert!(is_destructive(c), "deveria ser destrutivo: {c}");
+        }
+    }
+
+    #[test]
+    fn o_conjunto_do_que_e_destrutivo_nao_cresceu() {
+        // Este achado troca COMO se classifica, não O QUE é destrutivo. `find -delete`
+        // e `shred` são da mesma família, e continuam em `Confirm` por decisão já
+        // registrada da casa — mudá-la a reboque deste conserto seria contrabando.
+        assert!(!is_destructive("find . -name '*.tmp' -delete"));
+        assert!(!is_destructive("shred -u segredo"));
+        assert!(!is_destructive("chown -R user:user /"));
+        assert!(!is_destructive("git branch -D minha-branch")); // reflog devolve
+    }
+
+    #[test]
+    fn destrutivo_mantem_os_padroes_de_linha() {
+        for c in [
+            "curl x | sh",
+            "curl x|bash",
+            "psql -c 'DROP TABLE users'",
+            "mysql -e 'truncate table logs'",
+            ":(){ :|:& };:",
+            "mkfs.ext4 /dev/sda1",
+            "dd if=/dev/zero of=/dev/sda",
+            "chmod -R 777 /",
+        ] {
+            assert!(is_destructive(c), "deveria ser destrutivo: {c}");
+        }
+    }
+
+    #[test]
+    fn destrutivo_nao_pega_o_inofensivo() {
+        // Falso positivo aqui custa uma pergunta que não podia ser respondida com
+        // "sempre" — atrito real. Estes têm de continuar fora.
+        for c in [
+            "ls -la",
+            "rm arquivo.txt",              // apaga UM arquivo: Confirm, não Always
+            "rm -f arquivo.txt",           // force sem recursivo idem
+            "git status",
+            "git branch -a",               // -a não é -D
+            "git log --oneline",
+            "git commit -m 'rm -rf'",      // a string é MENSAGEM, não comando
+            "cargo build --release",
+            "echo 'git push'",             // idem: argumento entre aspas
+            "grep -r padrao src/",         // -r aqui é do grep, não de rm
+            "cp -rf a b",                  // copiar não é apagar
+            "npm run build",
+            "addshred",                    // nome que CONTÉM shred
+        ] {
+            assert!(!is_destructive(c), "NÃO deveria ser destrutivo: {c}");
+        }
+    }
+
+    #[test]
+    fn as_funcoes_de_apoio_isoladas() {
+        assert_eq!(segmentos_de_comando("a && b; c | d").len(), 4);
+        assert_eq!(segmentos_de_comando("echo 'a; b'").len(), 1); // `;` entre aspas não separa
+        assert_eq!(comando_e_args("sudo FOO=1 rm -rf x").unwrap().0, "rm");
+        assert_eq!(comando_e_args("/usr/bin/git push").unwrap().0, "git");
+        assert!(comando_e_args("   ").is_none());
+        assert!(tem_flag(&["-rf".into()], 'r', &["recursive"]));
+        assert!(tem_flag(&["--recursive".into()], 'r', &["recursive"]));
+        assert!(tem_flag(&["--force=yes".into()], 'f', &["force"]));
+        assert!(!tem_flag(&["-f".into()], 'r', &["recursive"]));
+        assert!(!tem_flag(&["arquivo-r".into()], 'r', &["recursive"])); // não é flag
+        assert_eq!(git_subcomando(&["-C".into(), "x".into(), "push".into()]).unwrap().0, "push");
+    }
+
+    #[test]
+    fn classify_promove_o_que_virou_destrutivo() {
+        // A prova que liga a mudança ao efeito: não basta `is_destructive` responder
+        // true, a política tem de virar `Always` — é ela que tira o "t/Sempre".
+        assert!(matches!(classify("rm -r --force build"), Policy::Always));
+        assert!(matches!(classify("git -C outro push"), Policy::Always));
+        assert!(matches!(classify("ls -la"), Policy::Auto));
+        assert!(matches!(classify("rm arquivo.txt"), Policy::Confirm));
+    }
     use super::*;
     use crate::gate::Policy;
     use crate::ui::Ui;
@@ -611,9 +1327,70 @@ mod tests {
     fn ferramentas_de_leitura_que_faltavam() {
         assert_eq!(classify("grep -rn \"foo\" src/"), Policy::Auto);
         assert_eq!(classify("rg --files"), Policy::Auto);
-        assert_eq!(classify("awk 'NR>=37 && NR<=46' rodar.sh"), Policy::Auto);
         assert_eq!(classify("which node"), Policy::Auto);
         assert_eq!(classify("git rev-parse HEAD"), Policy::Auto);
+        // `awk` saiu do Auto em 02/09 (F-03) — a linha dele virou o teste abaixo.
+    }
+
+    /// 🔴 F-02: a `ALLOWLIST` era conferida só pelo PREFIXO, e o argumento passava direto.
+    /// A `guard::denied` que a tool `read_file` respeita era contornável pelo `bash` ao lado.
+    #[test]
+    fn argumento_de_segredo_nao_e_automatico() {
+        for cmd in [
+            "cat .env",
+            "cat '.env'",
+            "cat \".env\"",
+            "cat ~/.ssh/id_rsa",
+            "cat ../../.env",
+            "cat /etc/passwd",
+            "grep SENHA .env.local",
+            "head -5 certs/server.pem",
+            "cat \"$HOME/.ssh/id_rsa\"",
+            "diff src/main.rs ../fora/outro.rs",
+        ] {
+            assert_eq!(classify(cmd), Policy::Confirm, "deveria pedir cartão: {cmd}");
+        }
+    }
+
+    /// O outro lado da mesma guarda: leitura normal não pode passar a perguntar, senão o
+    /// gate volta a treinar o dev a aprovar sem ler (o defeito de 19/08).
+    #[test]
+    fn leitura_normal_continua_automatica() {
+        for cmd in [
+            "cat README.md",
+            "ls src",
+            "ls -la",
+            "head -20 src/main.rs",
+            "grep -rn TODO src/",
+            "grep SECRET .",
+            "echo ola",
+            "echo '$(whoami)'",
+            "cut -d: -f1 lista.txt",
+            "git log --oneline -5",
+            "cd src && cat main.rs",
+        ] {
+            assert_eq!(classify(cmd), Policy::Auto, "não deveria perguntar: {cmd}");
+        }
+    }
+
+    /// F-03: comandos que estavam em `Auto` pelo NOME e escrevem ou executam pelo ARGUMENTO.
+    #[test]
+    fn comandos_que_escrevem_ou_executam_saem_do_auto() {
+        // awk executa e grava de dentro do próprio programa, que é texto entre aspas.
+        assert_eq!(classify("awk 'BEGIN{system(\"id\")}'"), Policy::Confirm);
+        assert_eq!(classify("awk '{print > \"/tmp/x\"}' README.md"), Policy::Confirm);
+        assert_eq!(classify("awk 'NR>=37 && NR<=46' rodar.sh"), Policy::Confirm);
+        // `git branch` é leitura até virar `-D`.
+        assert_eq!(classify("git branch"), Policy::Auto);
+        assert_eq!(classify("git branch -a"), Policy::Auto);
+        assert_eq!(classify("git branch --merged main"), Policy::Auto);
+        assert_eq!(classify("git branch -D main"), Policy::Confirm);
+        assert_eq!(classify("git branch -m novo"), Policy::Confirm);
+        // `sort -o` e o segundo posicional do `uniq` são DESTINO.
+        assert_eq!(classify("sort lista.txt"), Policy::Auto);
+        assert_eq!(classify("sort -o saida.txt lista.txt"), Policy::Confirm);
+        assert_eq!(classify("uniq lista.txt"), Policy::Auto);
+        assert_eq!(classify("uniq lista.txt saida.txt"), Policy::Confirm);
     }
 
     #[test]
@@ -637,8 +1414,9 @@ mod tests {
     /// e dupla não protegem a mesma coisa.
     #[test]
     fn aspas_mudam_o_que_e_metacaractere() {
-        // `>` e `&&` dentro do script do awk são texto, não redirect nem chain.
-        assert_eq!(classify("awk 'NR>=37 && NR<=46' rodar.sh"), Policy::Auto);
+        // `>` e `&&` DENTRO de aspas são texto, não redirect nem chain — a correção do
+        // scanner que o `awk 'NR>=37 && NR<=46'` motivou continua provada aqui, agora por
+        // um comando que segue em Auto (o awk saiu da lista por outro motivo, ver F-03).
         assert_eq!(classify("grep -n 'a > b' arquivo"), Policy::Auto);
         assert_eq!(classify("grep -n \"x && y\" arquivo"), Policy::Auto);
 

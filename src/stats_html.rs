@@ -85,6 +85,7 @@ fn view(s: &Stats) -> serde_json::Value {
     })
 }
 
+
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -162,7 +163,9 @@ const TEMPLATE: &str = r#"<!doctype html>
 const DATA = __DATA__;
 let range = "all", tab = "overview";
 
-function tile(k, v){ return `<div class="cell"><div class="k">${k}</div><div class="v">${v}</div></div>`; }
+// Escapa os DOIS: o rótulo é sempre literal, mas `v` inclui `v.model` — o nome vindo do
+// gateway (achado F-08). Escapar só o valor deixaria a próxima pessoa decidir de novo.
+function tile(k, v){ return `<div class="cell"><div class="k">${h(k)}</div><div class="v">${h(v)}</div></div>`; }
 
 function overview(v){
   if(v.empty) return `<div class="empty">Sem sessões neste período — converse com a Anna e volte aqui.</div>`;
@@ -176,18 +179,34 @@ function overview(v){
   for(const col of v.weeks){
     for(const day of col){
       if(day===null) cells += `<div class="d pad"></div>`;
-      else cells += `<div class="d l${day[0]}" title="${day[1]} sessão(ões)"></div>`;
+      else cells += `<div class="d l${h(day[0])}" title="${h(day[1])} sessão(ões)"></div>`;
     }
   }
   const legend = `<div class="legend">menos ${[0,1,2,3,4].map(l=>`<span class="d l${l}"></span>`).join("")} mais</div>`;
   const bits = [v.moby, v.cost].filter(Boolean).join(" · ");
-  const foot = bits ? `<div class="foot">${bits}</div>` : "";
+  const foot = bits ? `<div class="foot">${h(bits)}</div>` : "";
   return `<div class="grid">${g}</div><div class="heat">${cells}</div>${legend}${foot}`;
+}
+
+// Escapa para HTML. Tudo que vem do DATA e entra em `innerHTML` passa por aqui —
+// achado F-08 da revisão de 01/09/2026.
+//
+// O nome do modelo vem do gateway (`telemetry.model`), então é dado de servidor: um
+// perfil nomeado com HTML executaria no dashboard local. É o único `innerHTML` com dado
+// externo no repositório, e por isso vale fechá-lo mesmo sendo risco baixo — a alternativa
+// é lembrar, a cada campo novo, que este arquivo é diferente dos outros.
+//
+// Escapa no RENDER e não na geração em Rust, porque o `DATA` também é lido como número
+// (soma, ordenação); escapar na origem estragaria o dado para quem o usa como dado.
+function h(x){
+  return String(x ?? "").replace(/[&<>"']/g, c => (
+    {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]
+  ));
 }
 
 function models(v){
   if(!v.models.length) return `<div class="empty">Sem dados de modelo neste período.</div>`;
-  const rows = v.models.map(r=>`<tr><td class="m">${r.model}</td><td>${r.sessions}</td><td>${r.messages}</td><td>${r.tokens}</td><td>${r.cost}</td></tr>`).join("");
+  const rows = v.models.map(r=>`<tr><td class="m">${h(r.model)}</td><td>${h(r.sessions)}</td><td>${h(r.messages)}</td><td>${h(r.tokens)}</td><td>${h(r.cost)}</td></tr>`).join("");
   const note = v.modelKnown ? "" : `<div class="foot">O modelo passa a ser registrado a partir das próximas sessões.</div>`;
   return `<table><thead><tr><th>Modelo</th><th>Sessões</th><th>Mensagens</th><th>Tokens</th><th>Custo</th></tr></thead><tbody>${rows}</tbody></table>${note}`;
 }
@@ -204,3 +223,56 @@ draw();
 </script>
 </body></html>
 "#;
+
+#[cfg(test)]
+mod tests_escape_do_dashboard {
+    use super::TEMPLATE;
+
+    /// Achado F-08: `stats_html` é o **único** `innerHTML` com dado externo do repositório.
+    ///
+    /// O nome do modelo vem do gateway (`telemetry.model`), então um perfil nomeado com HTML
+    /// executaria no dashboard local. Risco baixo — e é exatamente por ser baixo que ele
+    /// precisa de régua: ninguém vai lembrar, ao acrescentar um campo daqui a seis meses, que
+    /// este arquivo é diferente de todos os outros.
+    #[test]
+    fn todo_dado_do_data_passa_pelo_escapador() {
+        // Campos que vêm do DATA e são renderizados em contexto HTML.
+        for campo in [
+            "r.model", "r.sessions", "r.messages", "r.tokens", "r.cost",
+            "day[0]", "day[1]", "bits",
+        ] {
+            let cru = format!("${{{campo}}}");
+            assert!(
+                !TEMPLATE.contains(&cru),
+                "`{cru}` entra no innerHTML sem escape — use `${{h({campo})}}`",
+            );
+            let escapado = format!("${{h({campo})}}");
+            assert!(
+                TEMPLATE.contains(&escapado),
+                "esperava `{escapado}` no template; o campo sumiu ou mudou de nome",
+            );
+        }
+    }
+
+    #[test]
+    fn o_escapador_existe_e_cobre_os_cinco() {
+        assert!(TEMPLATE.contains("function h(x)"), "o escapador do render sumiu");
+        for c in ["&amp;", "&lt;", "&gt;", "&quot;", "&#39;"] {
+            assert!(TEMPLATE.contains(c), "o escapador não cobre {c}");
+        }
+    }
+
+    #[test]
+    fn tile_escapa_rotulo_e_valor() {
+        // `tile("Modelo favorito ★", v.model)` — o valor é o nome vindo do gateway.
+        assert!(TEMPLATE.contains("${h(k)}") && TEMPLATE.contains("${h(v)}"));
+    }
+
+    /// Os fragmentos JÁ montados não podem ser escapados — seriam mostrados como texto.
+    #[test]
+    fn fragmento_de_html_montado_nao_e_escapado() {
+        for frag in ["${g}", "${cells}", "${legend}", "${foot}", "${rows}", "${note}"] {
+            assert!(TEMPLATE.contains(frag), "o fragmento {frag} sumiu ou foi escapado por engano");
+        }
+    }
+}

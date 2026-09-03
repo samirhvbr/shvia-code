@@ -1,5 +1,20 @@
 # Estado atual — SHVIA-CODE
 
+> **What this file is, read this before trusting a line of it (02/09/2026).** This is a
+> **dated log**, not a status page: each entry records what was true on its date and is
+> left as written. The entry of 08/07 saying C0 is "código pronto, falta EXECUTAR" is
+> accurate *for 08/07* — it is history, not a claim about today.
+>
+> The log **stops at 31/07/2026 (0.9.0)** while the repository is at 0.11.11. Nobody wrote
+> the entries for 0.10.x and 0.11.x, so the gap is real and is not filled here after the
+> fact. For what is true today, read `CHANGELOG.md` (kept per commit) and `version.md`.
+> Finding F-10 of the September 2026 review; the title stays because the file is referenced
+> by that name.
+>
+> `spikes/c0-gateway.php`, cited in the entries below, **was removed on 02/09/2026** — a
+> July PHP client that nothing compiled, tested or ran. The links to it were turned into
+> plain code spans so the record still reads, without pointing at a file that is gone.
+
 - **08/07/2026** — Nasce o repo com o **escopo aprovado** (0.0.1) + segurança e
   perfil `.claude` (0.0.2). Decisões travadas: `anna` · Rust · modelos livres
   (ADR-001). Remoto privado: `github.com/samirhvbr/SHVIA-CODE`.
@@ -8,7 +23,7 @@
      stateless com `tools[]`/`tool_choice`/`role=tool`; eventos `model →
      text_delta/reasoning_delta/tool_call → usage (custo) → done`; auditoria/
      LGPD/quotas herdadas; servidor não executa tool nenhuma.
-  2. ✅ Cliente do spike: [`spikes/c0-gateway.php`](../spikes/c0-gateway.php) —
+  2. ✅ Cliente do spike: `spikes/c0-gateway.php` (removido em 02/09) —
      loop completo com 2 tools read-only confinadas a sandbox em /tmp
      (list_dir/read_file, denylist de .env ativa) e um bug proposital pra Anna
      achar (`config.php: 'scheme' => 'htps'`).

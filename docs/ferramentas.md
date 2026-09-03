@@ -86,14 +86,74 @@ mostra o conteúdo. Recusa paths da denylist.
    "properties":{"command":{"type":"string"},
      "why":{"type":"string","description":"1 linha: por que este comando."}}}}
 ```
-- **Allowlist (auto)**: `ls`, `cat`, `pwd`, `echo`, `git status/diff/log/show`,
-  `composer test|install --dry-run`, `npm test|run`, `cargo check|clippy|test|build`,
-  `php -l`, `phpunit`, `pytest`, `make test` — read-only/idempotentes.
-- **Destrutivos (always confirm, `t` não vale)**: qualquer `rm -rf`, `git push`
-  (`-f`/`--force` em destaque), `git reset --hard`, `git clean -fd`, `dd`, `mkfs`,
-  `> arquivo`/`truncate`, `chmod -R 777`, `curl|sh`/`wget|sh`, drop/truncate SQL.
-- **Resto**: confirm. Sem shell interativo; captura stdout+stderr (teto de bytes);
-  timeout configurável. Resultado: saída + exit code.
+- **Allowlist (auto)** — a lista viva é a `ALLOWLIST` em `src/tools.rs`; em resumo:
+  navegação e leitura (`ls`, `cat`, `head`, `tail`, `wc`, `stat`, `tree`, `du`…), busca e
+  filtro (`grep`, `rg`, `cut`, `sort`, `uniq`, `nl`, `diff`, `jq`, `tr`…), git só-leitura
+  (`git status/diff/log/show/branch/rev-parse/ls-files/blame`…) e build/teste
+  (`npm test|run`, `cargo check|clippy|test|build`, `php -l`, `phpunit`, `pytest`,
+  `make test`). `curl`, `wget`, `ssh` e `docker` ficam **fora** de propósito.
+- 🔴 **O nome do comando não basta — o ARGUMENTO também é conferido** (desde a 0.11.8,
+  achado F-02 da revisão de 01/09/2026). Antes, a lista era casada só pelo **prefixo**, e
+  `cat .env` saía em **auto**: a `denylist` que a tool `read_file` respeita era contornável
+  pelo `bash` ao lado dela. Agora o segmento cai para **confirm** quando um argumento:
+  está na denylist de segredos (`.env`, `*.pem`, `id_rsa*`, `credentials`, `/.ssh/`,
+  `/.aws/`, `.git/`); é caminho **absoluto** ou de **home** (`~/…`); tem `..` que **escapa**
+  da raiz; ou traz **expansão de variável** (`$HOME/x`). Aspas não ajudam — a conferência é
+  por token, não pela string crua.
+- **Comandos que a lista deixava passar pelo nome e escrevem/executam pelo argumento**
+  (F-03): `awk` **saiu do auto** (`system("…")` e `print > "arq"` moram dentro do programa,
+  entre aspas, invisíveis ao scanner — mesmo critério que já mantinha o `sed` fora);
+  `git branch` só é auto nas formas de leitura (`-D`/`-m` pedem cartão); `sort -o` e o
+  segundo posicional do `uniq` são destino de escrita.
+- **O que a guarda de argumento NÃO fecha, e está escrito para não ser confundido:** busca
+  recursiva (`grep -r X .`) segue em auto e pode imprimir uma linha vinda de um `.env` do
+  projeto. Decidir por conteúdo é outra guarda, com outro custo.
+- **`npm run <script>`, `cargo build/test` e `make test` seguem em auto por DECISÃO:** eles
+  executam o que o projeto declara (`package.json`, `Cargo.toml`, `Makefile`), e um prompt
+  injetado não muda esses arquivos sem passar por `write_file`/`edit_file`, que têm cartão.
+  Em uma frase: o dev confia no `package.json` do próprio projeto. Para mudar, tire as
+  entradas da `ALLOWLIST` — é uma linha, e custa uma confirmação por build.
+- **Destrutivos (always confirm, `t` não vale)**: `rm` recursivo, `git push`,
+  `git reset --hard`, `git clean -f`, `dd`, `mkfs*`, `chmod -R 777`,
+  `curl|sh`/`wget|sh`, drop/truncate SQL, fork bomb.
+
+  🔴 **A classificação é por TOKEN, não por substring** (desde a 0.11.9, achado F-05).
+  Antes ela procurava a grafia — `contains("rm -rf")` — e o shell tem muitas grafias
+  para a mesma coisa. Caíam em **confirm** (onde o `t`/"Sempre" **vale**, que é
+  justamente o que "always" existe para impedir): `rm -r --force build`,
+  `git -C outro push`, `sudo rm -rf /`, `FOO=1 rm -rf x`, `/bin/rm -rf x`,
+  `cat lista | xargs rm -rf`. Agora o comando é reconhecido depois de descartar
+  prefixos transparentes (`sudo`, `env`, `xargs`…) e atribuições, e as flags são lidas
+  agrupadas (`-rf` = `-r -f` = `--recursive --force`).
+
+  ⚠️ **`rm -r` sem `-f` também é destrutivo**, e a mudança é deliberada: some com uma
+  árvore igual. O custo de errar para o lado estrito é uma confirmação; para o outro
+  lado, é uma árvore apagada com "sempre" memorizado.
+
+  ⚠️ O que **não** mudou: `find … -delete`, `shred` e `git branch -D` seguem em
+  **confirm** por decisão registrada da casa. Este achado troca *como* se classifica,
+  não *o que* é destrutivo.
+- **Resto**: confirm. Sem shell interativo; captura stdout+stderr (teto de bytes).
+  Resultado: saída + exit code.
+
+#### Teto de tempo (0.11.9, achado F-04)
+
+Cada `bash` tem **120 s** por padrão. `bash_timeout` no `config.toml`, ou
+`SHVIA_BASH_TIMEOUT`; **`0` desliga**.
+
+A doc prometia timeout em dois lugares e o código chamava `output()`, que espera para
+sempre. No REPL o dev vê e faz Ctrl-C; no **host NDJSON** (a casca do SHVIA-DESKTOP) a
+sessão simplesmente emudece, e o único remédio é matar o sidecar — perdendo a sessão.
+Era esse o custo, e não "o comando demora".
+
+Ao estourar, o **grupo de processos inteiro** é morto, não só o `sh -c`: quem trava é
+quase sempre o neto (o `node` do `npm run dev`, o binário do `cargo test`), e matar só o
+pai deixaria o neto segurando o pipe. O modelo recebe `ERRO: timeout de Ns` **com o que
+fazer** — rodar em background e ler depois, ou aumentar o teto —, senão ele repete o
+mesmo comando e gasta outro teto inteiro.
+
+É número, e não liga/desliga, porque suíte de integração legítima passa de 120 s: um teto
+binário empurraria quem tem suíte lenta a desligá-lo, que é o pior dos dois mundos.
 
 ### `git_status` · `git_diff` · gate: auto
 Wrappers de `git status --porcelain` / `git diff [--staged]`. Resultado = a saída.

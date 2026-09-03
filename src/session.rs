@@ -107,6 +107,55 @@ impl Store {
         out
     }
 
+    /// Apaga as sessões mais antigas que `dias`, pela data de MODIFICAÇÃO do arquivo.
+    ///
+    /// ## Por que existe (achado F-07 da revisão de 01/09/2026)
+    ///
+    /// A sessão guarda o histórico inteiro — inclusive `role=tool`, ou seja, tudo que o
+    /// `read_file` leu, e a última imagem em base64. Fica em `0600`, mas **para sempre**: a
+    /// única limpeza era `anna sessions clear`, tudo ou nada. Quem quer manter o trabalho
+    /// desta semana e não quer o `.env` que foi lido há três meses não tinha o que fazer.
+    ///
+    /// ## Por que `mtime`, e não um campo de data
+    ///
+    /// `Session` não tem carimbo, e acrescentar um só valeria para as sessões NOVAS —
+    /// justamente as que não interessam a uma limpeza por idade. O `mtime` do arquivo
+    /// existe para todas, inclusive as antigas, e responde à pergunta certa: "quando foi a
+    /// última vez que mexi nisto?".
+    ///
+    /// Arquivo sem `mtime` legível é **preservado**. Numa operação que apaga, a dúvida vota
+    /// em não apagar.
+    pub fn clear_older_than(&self, dias: u64) -> usize {
+        // `checked_mul` ANTES do `checked_sub`: `dias * 24 * 3600` estoura sozinho para
+        // um `dias` grande e derrubava o processo com "attempt to multiply with overflow"
+        // — encontrado por teste. Numa operação que apaga, estouro não pode virar pânico
+        // nem, pior, um corte no futuro que apagaria tudo.
+        let corte = match dias
+            .checked_mul(24 * 3600)
+            .map(std::time::Duration::from_secs)
+            .and_then(|d| std::time::SystemTime::now().checked_sub(d))
+        {
+            Some(c) => c,
+            None => return 0, // `dias` absurdo: não apaga nada
+        };
+        let mut n = 0;
+        if let Ok(rd) = std::fs::read_dir(&self.dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(modificado) = e.metadata().and_then(|m| m.modified()) else {
+                    continue; // sem data confiável: preserva
+                };
+                if modificado < corte && std::fs::remove_file(&p).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
     pub fn clear(&self) -> usize {
         let mut n = 0;
         if let Ok(rd) = std::fs::read_dir(&self.dir) {
@@ -129,3 +178,80 @@ fn set_perms(path: &Path, mode: u32) {
 }
 #[cfg(not(unix))]
 fn set_perms(_: &Path, _: u32) {}
+
+#[cfg(test)]
+mod tests_retencao {
+    use super::*;
+
+    /// Achado F-07: a sessão guarda o histórico inteiro — inclusive tudo que o
+    /// `read_file` leu — em 0600, mas para sempre. A única limpeza era tudo ou nada.
+    fn store_temp() -> Store {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let id = N.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("anna-sess-{}-{id}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Store { dir }
+    }
+
+    /// Cria um arquivo de sessão com `mtime` de `dias_atras`.
+    fn sessao_com_idade(st: &Store, id: &str, dias_atras: u64) {
+        let p = st.dir.join(format!("{id}.json"));
+        // O `list()` lê o id de DENTRO do json, não do nome do arquivo — o fixture tem
+        // de escrever o id certo, senão o teste compara nomes que ele mesmo inventou.
+        std::fs::write(&p, format!(r#"{{"id":"{id}","title":"t","messages":[]}}"#)).unwrap();
+        let quando = std::time::SystemTime::now() - std::time::Duration::from_secs(dias_atras * 24 * 3600);
+        // `set_times` é estável desde 1.75 e evita depender do `touch` do sistema.
+        let f = std::fs::File::options().write(true).open(&p).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(quando)).unwrap();
+    }
+
+    #[test]
+    fn apaga_so_o_que_passou_do_corte() {
+        let st = store_temp();
+        sessao_com_idade(&st, "antiga", 100);
+        sessao_com_idade(&st, "media", 40);
+        sessao_com_idade(&st, "recente", 2);
+
+        assert_eq!(st.clear_older_than(30), 2, "deveria apagar as de 100 e 40 dias");
+        let restantes: Vec<_> = st.list().into_iter().map(|(id, _)| id).collect();
+        assert_eq!(restantes, vec!["recente".to_string()]);
+    }
+
+    #[test]
+    fn corte_grande_nao_apaga_nada() {
+        let st = store_temp();
+        sessao_com_idade(&st, "a", 10);
+        assert_eq!(st.clear_older_than(365), 0);
+        assert_eq!(st.list().len(), 1);
+    }
+
+    #[test]
+    fn corte_zero_apaga_tudo_mas_clear_continua_existindo() {
+        let st = store_temp();
+        sessao_com_idade(&st, "a", 1);
+        sessao_com_idade(&st, "b", 0);
+        assert_eq!(st.clear_older_than(0), 2);
+    }
+
+    #[test]
+    fn nao_toca_no_que_nao_e_sessao() {
+        let st = store_temp();
+        sessao_com_idade(&st, "a", 100);
+        let outro = st.dir.join("anotacao.txt");
+        std::fs::write(&outro, "não é sessão").unwrap();
+        assert_eq!(st.clear_older_than(30), 1);
+        assert!(outro.exists(), "apagou um arquivo que não é sessão");
+    }
+
+    #[test]
+    fn dias_absurdo_nao_apaga_tudo() {
+        // `now - dias` estourando não pode virar "corte no futuro", que apagaria tudo.
+        // Numa operação destrutiva, a dúvida vota em não apagar.
+        let st = store_temp();
+        sessao_com_idade(&st, "a", 1);
+        assert_eq!(st.clear_older_than(u64::MAX), 0);
+        assert_eq!(st.list().len(), 1);
+    }
+}

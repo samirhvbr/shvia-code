@@ -448,6 +448,7 @@ mod tests {
             max_voltas: crate::config::DEFAULT_MAX_VOLTAS,
             elenco: Default::default(),
             verificacao: None,
+            bash_timeout: crate::config::DEFAULT_BASH_TIMEOUT_S,
         };
         // Este repo tem Cargo.toml → default de Rust.
         let raiz = Path::new(env!("CARGO_MANIFEST_DIR"));

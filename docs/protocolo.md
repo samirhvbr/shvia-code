@@ -156,4 +156,12 @@ quanto o **evento `error` no meio do stream**. Nunca ecoar a API key em log.
 ← data: {"kind":"done","data":{"text":"O config.php ...","tool_calls":[]}}   ← sem tools = resposta final
 ```
 
-Prova de referência: `spikes/c0-gateway.php` (implementa exatamente este loop).
+Prova de referência: `src/api.rs` — o cliente que o `anna` usa em produção, com os
+testes de (de)serialização do request e dos eventos ao lado, em `mod tests` do mesmo
+arquivo.
+
+> Até 02/09/2026 a referência apontava para `spikes/c0-gateway.php`, um cliente PHP de
+> 08/07 que nada compilava, testava ou executava — congelado no protocolo daquele dia,
+> num repositório Rust. Referência que ninguém roda não prova nada e envelhece calada;
+> a implementação real, que o CI compila e testa a cada push, prova. O spike foi
+> removido (achado F-10).

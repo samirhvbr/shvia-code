@@ -35,6 +35,7 @@ struct FileConfig {
     max_voltas: Option<usize>,
     elenco: Option<Elenco>,
     verificacao: Option<Vec<String>>,
+    bash_timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +55,18 @@ pub struct Config {
     /// Comandos do gate determinístico do orquestrador. `None` = detecta pela
     /// stack (Cargo.toml → cargo clippy/test etc.).
     pub verificacao: Option<Vec<String>>,
+    /// Teto de tempo de cada `bash`, em segundos. `0` desliga (achado F-04).
+    ///
+    /// Existe como número, e não como booleano, porque o valor certo depende do
+    /// projeto: uma suíte de integração legítima passa de 120 s, e um teto que só
+    /// pode ser ligado ou desligado empurra quem tem suíte lenta a desligá-lo — que
+    /// é o pior dos dois mundos.
+    pub bash_timeout: u64,
 }
+
+/// Teto padrão do `bash`, em segundos. Espelha `tools::TIMEOUT_BASH_PADRAO_S`, e a
+/// prova `padrao_de_timeout_bate_com_o_das_tools` reprova se os dois divergirem.
+pub const DEFAULT_BASH_TIMEOUT_S: u64 = 120;
 
 /// `true` se `url` puder receber a API key: https, ou http em LOOPBACK de verdade.
 ///
@@ -62,7 +74,7 @@ pub struct Config {
 /// `url.starts_with("http://localhost")`, e prefixo não é host:
 /// `http://localhost.atacante.tld` passava pela exceção de dev e a chave saía em
 /// CLARO para um domínio de terceiro (o `127.` era pior — `http://127.evil.com`).
-fn url_seguro(url: &str) -> bool {
+pub fn url_seguro(url: &str) -> bool {
     let (esquema, resto) = match url.split_once("://") {
         Some(p) => p,
         None => return false,
@@ -99,6 +111,68 @@ fn resolver_max_voltas(env: Option<String>, arquivo: Option<usize>) -> usize {
         .or(arquivo)
         .unwrap_or(DEFAULT_MAX_VOLTAS)
         .max(1)
+}
+
+
+/// O `config.toml` guarda `api_key`. Ele está com permissão frouxa?
+///
+/// ## Por que existe (achado F-06 da revisão de 01/09/2026)
+///
+/// O README e o `docs/arquitetura-cli.md` prometiam `0600` e "keychain se der". Nenhum dos
+/// dois existia: o `anna` não tinha comando que escrevesse o config, então o usuário o criava
+/// à mão com o umask dele — tipicamente `0644`, legível por qualquer conta da máquina — e a
+/// leitura não dizia nada. Uma promessa de permissão que ninguém cria nem confere é pior que
+/// silêncio: quem leu a doc acredita que está protegido.
+///
+/// Só avisa quando há **chave dentro**. Config sem `api_key` em `0644` não é problema, e
+/// avisar ali treinaria o dev a ignorar o aviso — que é como uma guarda morre.
+///
+/// Devolve `Some(modo)` quando está frouxo. Em não-Unix, sempre `None`: não há modo POSIX
+/// para conferir, e inventar um aviso que não mede nada seria teatro.
+#[cfg(unix)]
+pub fn permissao_frouxa(caminho: &std::path::Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    let modo = std::fs::metadata(caminho).ok()?.permissions().mode() & 0o777;
+    // Qualquer bit para grupo ou outros. `0600` e `0400` passam.
+    (modo & 0o077 != 0).then_some(modo)
+}
+
+#[cfg(not(unix))]
+pub fn permissao_frouxa(_caminho: &std::path::Path) -> Option<u32> {
+    None
+}
+
+/// Grava `api_key` no `config.toml` com `0600`, preservando o resto do arquivo.
+///
+/// Escreve num temporário no MESMO diretório e renomeia: `rename` dentro do mesmo sistema de
+/// arquivos é atômico, então uma queda no meio deixa o config antigo intacto em vez de um
+/// arquivo pela metade — e um config truncado aqui significa perder url, elenco e verificação
+/// junto com a chave.
+///
+/// A permissão é posta **antes** do rename, no temporário: criar em `0644` e ajustar depois
+/// abre uma janela em que a chave está no disco legível por todos.
+pub fn gravar_api_key(chave: &str) -> Result<PathBuf> {
+    let caminho = Config::path().context("não consegui resolver o diretório de config do SO")?;
+    let dir = caminho.parent().context("caminho de config sem diretório pai")?;
+    std::fs::create_dir_all(dir).with_context(|| format!("criando {}", dir.display()))?;
+
+    let atual = std::fs::read_to_string(&caminho).unwrap_or_default();
+    let mut doc: toml::Table = toml::from_str(&atual)
+        .with_context(|| format!("parse de {} (conserte à mão antes)", caminho.display()))?;
+    doc.insert("api_key".into(), toml::Value::String(chave.to_string()));
+    let texto = toml::to_string_pretty(&doc).context("serializando o config")?;
+
+    let tmp = caminho.with_extension("toml.tmp");
+    std::fs::write(&tmp, &texto).with_context(|| format!("escrevendo {}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("0600 em {}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, &caminho)
+        .with_context(|| format!("renomeando para {}", caminho.display()))?;
+    Ok(caminho)
 }
 
 impl Config {
@@ -139,16 +213,37 @@ impl Config {
         let max_voltas =
             resolver_max_voltas(std::env::var("SHVIA_MAX_VOLTAS").ok(), file.max_voltas);
 
-        // Chave: env tem precedência; senão o arquivo (0600). Nunca de arg.
+        // Chave: env tem precedência; senão o arquivo. Nunca de arg.
+        let do_arquivo = file.api_key;
+
+        // F-06: a doc prometia 0600 e nada criava nem conferia. Avisa só quando há
+        // chave DENTRO — aviso em config sem chave treina o dev a ignorá-lo.
+        if do_arquivo.is_some() {
+            if let Some(p) = Self::path() {
+                if let Some(modo) = permissao_frouxa(&p) {
+                    eprintln!(
+                        "aviso: {} está {:o} e contém api_key — qualquer conta da máquina consegue ler.\n\
+                         \x20      Conserte com: chmod 600 {}   (ou use `anna config set-key`, que grava 0600)",
+                        p.display(), modo, p.display()
+                    );
+                }
+            }
+        }
+
         let api_key = std::env::var("SHVIA_API_KEY")
             .ok()
             .filter(|k| !k.is_empty())
-            .or(file.api_key);
+            .or(do_arquivo);
 
         let elenco = file.elenco.unwrap_or_default();
         let verificacao = file.verificacao;
+        let bash_timeout = std::env::var("SHVIA_BASH_TIMEOUT")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .or(file.bash_timeout)
+            .unwrap_or(DEFAULT_BASH_TIMEOUT_S);
 
-        Ok(Self { url, profile, api_key, effort, max_voltas, elenco, verificacao })
+        Ok(Self { url, profile, api_key, effort, max_voltas, elenco, verificacao, bash_timeout })
     }
 
     /// `Config` derivada para um papel do orquestrador: troca só perfil/esforço,
@@ -201,6 +296,7 @@ mod tests_elenco {
             max_voltas: DEFAULT_MAX_VOLTAS,
             elenco: Elenco::default(),
             verificacao: None,
+            bash_timeout: DEFAULT_BASH_TIMEOUT_S,
         }
     }
 
@@ -314,5 +410,75 @@ mod tests_max_voltas {
         // 0 seria um agente que nunca chama o modelo — erro de config vira o mínimo útil.
         assert_eq!(resolver_max_voltas(Some("0".into()), None), 1);
         assert_eq!(resolver_max_voltas(None, Some(0)), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_permissao_e_chave {
+    use super::*;
+
+    fn temp(nome: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let id = N.fetch_add(1, Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("anna-cfg-{}-{id}", std::process::id()));
+        let _ = std::fs::create_dir_all(&d);
+        d.join(nome)
+    }
+
+    /// Achado F-06: a doc prometia 0600 e nada criava nem conferia.
+    #[cfg(unix)]
+    #[test]
+    fn permissao_frouxa_reclama_do_que_o_grupo_ou_outros_leem() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = temp("c.toml");
+        std::fs::write(&p, "api_key='x'").unwrap();
+
+        for (modo, deve_reclamar) in [
+            (0o600, false), // o prometido
+            (0o400, false), // só leitura do dono também está fechado
+            (0o644, true),  // o que o umask típico produz
+            (0o640, true),  // o grupo lê
+            (0o604, true),  // "outros" leem
+            (0o666, true),
+        ] {
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(modo)).unwrap();
+            assert_eq!(
+                permissao_frouxa(&p).is_some(),
+                deve_reclamar,
+                "modo {modo:o} deveria {} reclamar",
+                if deve_reclamar { "" } else { "NÃO" }
+            );
+        }
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permissao_frouxa_devolve_o_modo_para_a_mensagem() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = temp("modo.toml");
+        std::fs::write(&p, "x=1").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // O número tem de chegar à mensagem: "está frouxo" sem dizer QUANTO manda o
+        // dev descobrir sozinho o que consertar.
+        assert_eq!(permissao_frouxa(&p), Some(0o644));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn arquivo_inexistente_nao_reclama() {
+        assert!(permissao_frouxa(&temp("nao-existe.toml")).is_none());
+    }
+
+    /// Prova de paridade: os dois defaults de timeout são o MESMO número.
+    ///
+    /// Ele existe em dois lugares por necessidade — `tools` não conhece `config` (é ela
+    /// que empurra o valor), e `config` precisa de um padrão quando o arquivo é omisso.
+    /// Dois números que deveriam ser um é exatamente a forma de defeito que esta revisão
+    /// mais encontrou; aqui ela falha no teste em vez de virar "o teto não é o que a doc diz".
+    #[test]
+    fn padrao_de_timeout_bate_com_o_das_tools() {
+        assert_eq!(DEFAULT_BASH_TIMEOUT_S, crate::tools::TIMEOUT_BASH_PADRAO_S);
     }
 }

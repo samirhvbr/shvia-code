@@ -90,7 +90,10 @@ enum ToolsMode {
 #[derive(Subcommand)]
 enum Cmd {
     /// Mostra a config resolvida (url, perfil, de onde vem a chave).
-    Config,
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
     /// Sessões locais (~/.shvia-code/sessions).
     Sessions {
         #[command(subcommand)]
@@ -117,13 +120,30 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum ConfigAction {
+    /// Grava a `api_key` no config.toml com permissão 0600 (achado F-06).
+    ///
+    /// Existe porque a doc prometia 0600 e nada criava o arquivo: o usuário o fazia à
+    /// mão, com o umask dele — tipicamente 0644, legível por qualquer conta da máquina.
+    SetKey {
+        /// A chave. Sem isto, lê do stdin — que é o modo que NÃO deixa a chave no
+        /// histórico do shell.
+        chave: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum SessionAction {
     /// Lista as sessões salvas (mais recentes primeiro).
     List,
     /// Retoma uma sessão pelo id (cai no REPL com o histórico).
     Resume { id: String },
-    /// Apaga todas as sessões locais.
-    Clear,
+    /// Apaga sessões locais (todas, ou só as mais antigas que N dias).
+    Clear {
+        /// Só as sem uso há mais de N dias. Sem isto, apaga todas.
+        #[arg(long, value_name = "DIAS")]
+        older_than: Option<u64>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -139,8 +159,29 @@ fn main() -> anyhow::Result<()> {
     // Subcomandos.
     let mut resume_id: Option<String> = None;
     match &cli.cmd {
-        Some(Cmd::Config) => {
+        Some(Cmd::Config { action: None }) => {
             print_config(&cfg);
+            return Ok(());
+        }
+        Some(Cmd::Config { action: Some(ConfigAction::SetKey { chave }) }) => {
+            let k = match chave {
+                Some(k) => k.trim().to_string(),
+                None => {
+                    // Sem argumento a chave não passa pela linha de comando, e portanto
+                    // não fica no `~/.bash_history` nem na lista de processos.
+                    eprint!("chave: ");
+                    use std::io::Write;
+                    let _ = std::io::stderr().flush();
+                    let mut buf = String::new();
+                    std::io::stdin().read_line(&mut buf)?;
+                    buf.trim().to_string()
+                }
+            };
+            if k.is_empty() {
+                anyhow::bail!("chave vazia — nada gravado");
+            }
+            let p = config::gravar_api_key(&k)?;
+            println!("chave gravada em {} (0600).", p.display());
             return Ok(());
         }
         Some(Cmd::Sessions { action }) => match action {
@@ -160,9 +201,17 @@ fn main() -> anyhow::Result<()> {
                 }
                 return Ok(());
             }
-            SessionAction::Clear => {
-                let n = Store::open().map(|st| st.clear()).unwrap_or(0);
-                println!("{n} sessão(ões) apagada(s).");
+            SessionAction::Clear { older_than } => {
+                let n = Store::open()
+                    .map(|st| match older_than {
+                        Some(d) => st.clear_older_than(*d),
+                        None => st.clear(),
+                    })
+                    .unwrap_or(0);
+                match older_than {
+                    Some(d) => println!("{n} sessão(ões) sem uso há mais de {d} dia(s) apagada(s)."),
+                    None => println!("{n} sessão(ões) apagada(s)."),
+                }
                 return Ok(());
             }
             SessionAction::Resume { id } => resume_id = Some(id.clone()),
@@ -173,6 +222,9 @@ fn main() -> anyhow::Result<()> {
         }
         None => {}
     }
+
+    // Teto de tempo do `bash` (achado F-04). Antes de qualquer ferramenta rodar.
+    tools::configurar_timeout_bash(cfg.bash_timeout);
 
     let project = Project::detect();
     // Memória de longo prazo (ai-memory) — no-op sem AI_MEMORY_URL.
@@ -635,4 +687,172 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(images, vec!["AAA".to_string(), "BBB".to_string()]);
     }
+}
+
+/// Réguas do próprio repositório — coisas que nenhum teste de produto pega porque
+/// não estão no caminho do produto, e que envelhecem em silêncio.
+#[cfg(test)]
+mod reguas_do_repo {
+    use std::path::Path;
+
+    /// Toda `uses:` do CI está pinada por SHA de commit — achado F-09.
+    ///
+    /// Tag de GitHub Action é **ponteiro móvel**: `actions/checkout@v4` roda o que o dono
+    /// do repositório publicar amanhã sob aquela tag, com as permissões deste workflow e
+    /// acesso ao token do job. Não é hipótese remota — é o vetor de `tj-actions/changed-files`
+    /// (03/2025), em que uma tag movida passou a vazar segredos de milhares de repositórios.
+    ///
+    /// A régua persegue a causa, não o sintoma: o defeito não é "esta action está solta", é
+    /// **uma action nova entrar sem pin**. Por isso ela varre o diretório inteiro e não uma
+    /// lista — um workflow novo já nasce medido.
+    ///
+    /// O comentário `# vX.Y.Z` ao lado do SHA não é enfeite: sem ele, subir o pin vira
+    /// arqueologia. A régua exige os dois.
+    #[test]
+    fn toda_action_do_ci_esta_pinada_por_sha() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
+        let mut vistos = 0usize;
+        let mut soltas: Vec<String> = Vec::new();
+
+        let entradas = std::fs::read_dir(&dir).expect("o repositório tem .github/workflows");
+        for e in entradas.flatten() {
+            let caminho = e.path();
+            let ext = caminho.extension().and_then(|x| x.to_str()).unwrap_or("");
+            if ext != "yml" && ext != "yaml" {
+                continue;
+            }
+            let arquivo = caminho.file_name().unwrap().to_string_lossy().to_string();
+            let texto = std::fs::read_to_string(&caminho).expect("workflow legível");
+            for (n, linha) in texto.lines().enumerate() {
+                let corte = linha.trim_start();
+                // Só `uses:` de action; `uses:` dentro de comentário não conta.
+                if corte.starts_with('#') {
+                    continue;
+                }
+                let Some(resto) = corte.strip_prefix("- uses:").or_else(|| corte.strip_prefix("uses:")) else {
+                    continue;
+                };
+                let referencia = resto.trim().split('#').next().unwrap_or("").trim();
+                // `uses:` local (`./algo`) e de container (`docker://`) não têm SHA a pinar.
+                if referencia.starts_with('.') || referencia.starts_with("docker://") {
+                    continue;
+                }
+                vistos += 1;
+                let sha = referencia.rsplit('@').next().unwrap_or("");
+                let pinada = sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit());
+                // O comentário que diz QUAL versão o SHA é.
+                let tem_nota = linha.contains('#');
+                if !pinada || !tem_nota {
+                    let porque = if pinada { "sem o comentário dizendo a versão" } else { "não é SHA de 40 hex" };
+                    soltas.push(format!("{arquivo}:{}  {referencia}  ({porque})", n + 1));
+                }
+            }
+        }
+
+        assert!(vistos > 0, "nenhuma `uses:` encontrada — a régua estaria medindo o vazio");
+        assert!(
+            soltas.is_empty(),
+            "action(s) do CI sem pin por SHA (+ comentário da versão):\n  {}\n\
+             Resolva a tag com:\n  \
+             gh api repos/<dono>/<repo>/git/ref/tags/<tag> --jq '.object.sha'",
+            soltas.join("\n  ")
+        );
+    }
+    /// A árvore de `docs/arquitetura-cli.md` §2 bate com o `src/` — achado F-10.
+    ///
+    /// A seção descrevia `api/`, `tools/`, `ui/`, `cli.rs` e `error.rs`: um desenho por
+    /// subdiretório que foi abandonado cedo e nunca chegou ao disco. Doc velha é comum; o
+    /// que faz esta valer uma régua é que ela estava sendo **mantida velha** — as notas dos
+    /// achados F-04 e F-05 foram escritas dentro da descrição de um `shell.rs` que não
+    /// existe. Quem edita a doc não olha a árvore, e quem cria módulo não abre a doc.
+    ///
+    /// Então a régua fecha os dois lados: módulo do `src/` que não está documentado, e
+    /// módulo documentado que não está no `src/`. Um arquivo novo em `src/` deixa o
+    /// `cargo test` vermelho até ganhar uma linha na doc.
+    #[test]
+    fn arvore_da_doc_bate_com_src() {
+        let raiz = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let doc = std::fs::read_to_string(raiz.join("docs/arquitetura-cli.md"))
+            .expect("docs/arquitetura-cli.md legível");
+
+        // O bloco de código da §2 — entre a linha `src/` e a cerca que o fecha.
+        let inicio = doc.find("\nsrc/\n").expect("a §2 tem o bloco da árvore começando em `src/`");
+        let bloco = &doc[inicio..];
+        let fim = bloco.find("\n```").expect("o bloco da árvore é fechado");
+        let bloco = &bloco[..fim];
+
+        let mut na_doc: Vec<String> = bloco
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim();
+                // Só as linhas que ABREM a descrição de um módulo (`  nome.rs   texto`);
+                // as linhas de continuação são indentadas além e não começam com o nome.
+                if !l.starts_with("  ") || l.starts_with("   ") {
+                    return None;
+                }
+                t.split_whitespace().next().filter(|n| n.ends_with(".rs")).map(str::to_string)
+            })
+            .collect();
+
+        let mut no_src: Vec<String> = std::fs::read_dir(raiz.join("src"))
+            .expect("src/ legível")
+            .flatten()
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                n.ends_with(".rs").then_some(n)
+            })
+            .collect();
+
+        na_doc.sort();
+        no_src.sort();
+
+        let faltam: Vec<&String> = no_src.iter().filter(|f| !na_doc.contains(f)).collect();
+        let sobram: Vec<&String> = na_doc.iter().filter(|f| !no_src.contains(f)).collect();
+
+        assert!(
+            faltam.is_empty() && sobram.is_empty(),
+            "docs/arquitetura-cli.md §2 divergiu do src/:\n  \
+             no src/ e FORA da doc: {faltam:?}\n  \
+             na doc e FORA do src/: {sobram:?}"
+        );
+        assert!(no_src.len() > 10, "o src/ tem {} arquivos — a régua estaria medindo o vazio", no_src.len());
+    }
+
+    /// `AGENTS.md` e `CLAUDE.md` são o mesmo texto abaixo do H1 — achado F-21.
+    ///
+    /// Os dois arquivos JÁ exigiam isso, por escrito, de si mesmos. E os dois violavam:
+    /// no DESKTOP o comentário HTML do topo, no MOBILE o blockquote "Leia também". Não por
+    /// desleixo — o bloco que divergia era exatamente o que dizia *"este arquivo é espelho
+    /// do outro"*, e escrito em 1ª pessoa ele **não pode** ser idêntico nos dois. A regra
+    /// era impossível de cumprir, o que é a razão pela qual instrução sem guarda apodrece:
+    /// ninguém percebe que está pedindo o impossível.
+    ///
+    /// O ponteiro foi reescrito na 3ª pessoa (nomeia os dois arquivos, não "este"), e agora
+    /// a régua vale de verdade. Um `diff` de uma linha, que roda a cada `cargo test`.
+    #[test]
+    fn agents_e_claude_sao_espelho() {
+        let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // Nos dois repos Tauri o Cargo.toml vive em `src-tauri/`; no CODE, na raiz.
+        let base = if raiz.join("../AGENTS.md").exists() { raiz.join("..") } else { raiz.to_path_buf() };
+        let ler = |n: &str| {
+            let p = base.join(n);
+            let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{} ilegível: {e}", p.display()));
+            // Fora o H1 (a única linha que PODE diferir: cada arquivo tem seu título).
+            t.lines().skip(1).collect::<Vec<_>>().join("\n")
+        };
+        let agents = ler("AGENTS.md");
+        let claude = ler("CLAUDE.md");
+        assert!(agents.len() > 500, "AGENTS.md tem {} bytes abaixo do H1 — a régua estaria medindo o vazio", agents.len());
+        if agents != claude {
+            let a: Vec<&str> = agents.lines().collect();
+            let c: Vec<&str> = claude.lines().collect();
+            let primeira = (0..a.len().max(c.len()))
+                .find(|&i| a.get(i) != c.get(i))
+                .map(|i| format!("linha {} abaixo do H1:\n    AGENTS.md: {:?}\n    CLAUDE.md: {:?}",
+                    i + 2, a.get(i).unwrap_or(&"<fim>"), c.get(i).unwrap_or(&"<fim>")))
+                .unwrap_or_default();
+            panic!("AGENTS.md e CLAUDE.md divergem abaixo do H1 — {primeira}");
+        }
+    }
+
 }

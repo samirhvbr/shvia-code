@@ -31,8 +31,11 @@ export SHVIA_API_KEY=<sua-chave-do-ShvIA>
 ```
 
 Precisa de Rust (`rustup`) — o `install.sh` avisa se faltar algo. A chave vem de
-`SHVIA_API_KEY` ou `~/.config/shvia-code/config.toml` (0600) — **nunca** por
-argumento de CLI. `anna config` mostra o estado resolvido.
+`SHVIA_API_KEY` ou `~/.config/shvia-code/config.toml` — **nunca** por argumento de
+CLI. Para gravá-la no arquivo com `0600`, use `anna config set-key` (sem argumento
+ele lê do stdin, e assim a chave não fica no histórico do shell). Se o arquivo tiver
+chave e permissão frouxa, o `anna` avisa ao carregar. `anna config` mostra o estado
+resolvido.
 
 ## Usar
 

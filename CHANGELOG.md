@@ -3,6 +3,302 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.15 - `bash` gets a time ceiling, destructive is read by token, and the config's 0600 stops being a promise
+
+Findings **F-04**, **F-05**, **F-06** and **F-07** of the 01/09/2026 technical review. All
+four are the same subject — the gate, and the hygiene of whoever holds a secret — and two of
+them are documentation promising what the code did not do.
+
+### F-04 · `bash` had no timeout, and the docs said it had
+
+`Command::output()` **waits forever**. A `tail -f`, a `sleep`, an `npm run dev` or a stuck
+`cargo test` froze the turn. In the REPL the developer sees it and hits Ctrl-C; in the
+**NDJSON host** — the SHVIA-DESKTOP shell — the session **goes mute**, and the only remedy is
+killing the sidecar, which loses the session. The cost was not "the command is slow", it was
+"the only way out loses the work".
+
+Now: **120 s** by default, `bash_timeout` in the config or `SHVIA_BASH_TIMEOUT`, `0` disables.
+
+- 🔴 **It kills the process GROUP, not just the `sh -c`.** What hangs is almost always the
+  grandchild (the `node` of `npm run dev`); killing only the parent would leave the grandchild
+  alive holding the pipe — and the read would stay hung exactly as before, with the difference
+  of now lying that there was a timeout. It has its own proof: the test records the
+  grandchild's PID and confirms with `kill -0` that it died.
+- **Two threads drain the pipes** while the command runs. Without that, a command writing more
+  than the pipe buffer (64 KB) blocks on the write, and the ceiling would kill it as if it
+  were stuck — "fixing" a healthy process. Also proven.
+- The timeout message tells the model **what to do** (run it in the background, or raise the
+  ceiling). Without that it repeats the same command and burns another whole ceiling.
+- It is a number and not an on/off because a legitimate integration suite goes past 120 s: a
+  binary ceiling would push whoever has a slow suite into disabling it, which is the worst of
+  both worlds.
+
+**Measured:** with the ceiling reverted, the test `comando_que_trava_e_morto_no_teto` takes
+**30.00 s** and fails; with it, 0.30 s.
+
+### F-05 · `is_destructive` classified by SPELLING, not by semantics
+
+`c.contains("rm -rf")` looks for the spelling, and the shell has many spellings for the same
+thing. These landed in `Confirm` — where **"y/Always" counts**, which is exactly what `Always`
+exists to prevent: `rm -r --force build`, `git -C other push`, `sudo rm -rf /`,
+`FOO=1 rm -rf x`, `/bin/rm -rf x`, `cat list | xargs rm -rf`.
+
+Now the line is split into segments (`;`, `|`, `&&`, `||`, command substitution), the command
+is recognised after discarding transparent prefixes (`sudo`, `env`, `xargs`…) and
+`KEY=value` assignments, and flags are read **grouped** (`-rf` = `-r -f` =
+`--recursive --force`). `git` skips the global options that take a value (`-C <dir>`,
+`-c k=v`), which is how `git -C other push` escaped. It reuses `tokens()` from F-02 — the same
+definition, not a second copy.
+
+- ⚠️ **`rm -r` without `-f` became destructive**, and that is a decision: it removes a tree
+  just the same. The cost of erring on the strict side is one confirmation; on the other side,
+  a deleted tree with "always" memorised.
+- ⚠️ **The set of what counts as destructive did NOT grow.** `find … -delete`, `shred`,
+  `chown -R` and `git branch -D` stay in `Confirm` — the house already tested them that way,
+  and promoting them on the back of this fix would be changing decided behaviour by
+  smuggling. It is recorded in the review as a question for the owner. There is a test that
+  **fails** if the set grows.
+
+**Measured:** with the substring back, **7 tests** go red.
+
+### F-06 · the config's `0600` was promised on both sides and existed on neither
+
+The README and `arquitetura-cli.md` promised `0600` and "keychain if possible". There was no
+command that wrote the config, so the user created it by hand with their own umask —
+typically `0644`, readable by any account on the machine — and the read said nothing. A
+permission promise that nobody creates and nobody checks is **worse than silence**: whoever
+read the docs believes they are protected.
+
+- `anna config set-key [KEY]` writes with `0600`, preserving the rest of the file. It writes
+  to a temporary file in the same directory, sets the permission **first** and renames —
+  `rename` is atomic, and creating at `0644` to adjust afterwards would open a window with the
+  key readable. **With no argument it reads from stdin**, which is the mode that keeps the key
+  out of the shell history.
+- On load it warns with the mode and the fixing command — **only when there is an `api_key`
+  inside**. Warning on a config with no key would train the developer to ignore the warning,
+  which is how a guard dies.
+- **Keychain left the docs** instead of staying promised.
+
+### F-07 · retention with no deadline, and a memory hook accepting `http://`
+
+The session stores the whole history, including `role=tool` — everything `read_file` read —
+and the last image in base64. At `0600`, but **forever**: the only cleanup was all or nothing.
+Now `anna sessions clear --older-than N`, by `mtime` (`Session` has no timestamp, and a new
+field would only apply to new sessions — precisely the ones that do not matter). A file with
+no readable date is **preserved**: in an operation that deletes, doubt votes for not deleting.
+
+And the `ai-memory` hook sends `bearer_auth` + prompts + 400 chars of each tool result,
+accepting **any** scheme in `AI_MEMORY_URL` — over `http://` outside the loopback, token and
+content in the clear on the network. The **same** rule as `SHVIA_URL` now applies
+(`config::url_seguro`, imported and not re-copied: it already has proof, and a second copy
+would diverge). An insecure URL **disables memory with a warning** instead of refusing to
+boot — memory is optional, and taking the tool down would trade a leak for an outage.
+
+The decision moved out of `init` into a pure function, because `init` writes to a `OnceLock`
+and cannot be exercised twice in a test. Same choice as `politica.mjs` in SHVIA-DESKTOP.
+
+### Found by the tests themselves
+
+`clear_older_than` overflowed the arithmetic (`days * 24 * 3600`) and brought the process down
+with "attempt to multiply with overflow". In an operation that deletes, an overflow must not
+become a panic nor, worse, a cutoff in the future that would delete everything. Fixed with
+`checked_mul` before the `checked_sub`.
+
+**Suite: 95/95** (was 66). Clippy clean with `-D warnings` on every target. The two new
+commands were exercised for real, not just by reading: `set-key` writes `600` and preserves
+`url` and `profile`; the permission warning fires at `0644` and stays quiet at `0600`; an
+insecure `AI_MEMORY_URL` prints the warning on the real `anna -p` path.
+
+Docs: `docs/ferramentas.md`, `docs/arquitetura-cli.md`, `README.md`.
+
+## 0.11.14 - the `bash` gate looks at the ARGUMENT, not just the command name
+
+Findings **F-02** and **F-03** of the 01/09/2026 technical review — and F-02 is the one that
+hurts most to read, because the lock already existed and was bypassable through the tool next
+to it.
+
+🔴 **`cat .env` came out as `Policy::Auto`.** The `ALLOWLIST` was matched by the command
+**prefix** only; no argument was checked. `guard::denied` — which makes `read_file` refuse
+`.env`, `*.pem`, `id_rsa*`, `credentials`, `/.ssh/`, `/.aws/` — was never consulted on the
+`bash` path. The same model that the read tool blocks picked the path and went through the
+shell, **with no approval card**, and the content went on to the provider. `cat ~/.ssh/id_rsa`,
+`cat ../../.env` and `cat /etc/passwd` also passed.
+
+- **The argument guard** (`argumento_de_caminho_recusado`) downgrades the segment to `Confirm`
+  when a token: falls in the secrets denylist; is an **absolute** or **home** path; has a `..`
+  that **escapes** the root; or carries **variable expansion** (`$HOME/x`). The check is **per
+  token, with quotes resolved** — `cat '.env'` and `cat ".env"` do not dodge it. It does not
+  touch the disk: an `ls folder-i-am-about-to-create` does not become a question.
+- **`awk` left `Auto`** by the same criterion that already kept `sed` out: `system("…")`
+  executes and `print > "file"` writes **inside the program**, which is quoted text and
+  therefore invisible to the metacharacter scanner. And telling `print > "f"` from `NR >= 37`
+  apart is the same ambiguity this house has already tripped on — the comment on
+  `dividir_por_and` records the day a `contains('>')` refused `awk 'NR>=37 && NR<=46'`. A
+  partial guard would be wrong on both sides. Cost: one confirmation per `awk`; for ranges and
+  columns, `head`, `tail`, `nl`, `cut` and `grep -n` remain.
+- **`git branch` is read-only only while it is read-only:** `-D`, `-d`, `-m` and friends ask
+  for a card. The `git branch` prefix let `git branch -D main` straight through.
+- **`sort -o out` and `uniq in out` write** — both were in `Auto` by name, and the name does
+  not say the second positional is a destination.
+
+**What was NOT closed, and is written down instead of masked:** recursive search
+(`grep -r X .`) stays in `Auto` and may print a line coming from a project `.env` — closing
+that means deciding by **content**, not by path, and is another guard. And `npm run`,
+`cargo build/test` and `make test` stay automatic by **recorded decision**: they run what the
+project declares, and an injected prompt does not change `package.json` without passing a
+write card. Whoever disagrees removes the entries from the list — it is one line.
+
+3 new tests (26 assertions), including the quoting case and the one for commands that write
+through the argument. **Reversal checked on both halves:** turning the argument guard off
+drops the secrets test; putting `awk` back on the list drops the one for commands that
+execute. Suite **66**.
+
+Docs in the same commit: `docs/ferramentas.md` — the `bash` section was listing an allowlist
+smaller than the real one (finding F-10) and now describes the whole rule, including what it
+does not cover.
+
+## 0.11.13 - `master` compiles again: the two-version bump went out half-done
+
+Finding **F-01** of the 01/09/2026 technical review. Versions **0.11.5** and **0.11.6**
+touched only `version.md` — and this repository has **three** version carriers. `build.rs`,
+which exists exactly for this, brought the build down with `BUMP PELA METADE`:
+
+```
+✗ BUMP PELA METADE — version.md diz 0.11.6, e eles discordam:
+      Cargo.toml = 0.11.4
+      Cargo.lock = 0.11.4
+```
+
+Two versions (29/08 → 02/09) in which `cargo check`, `clippy`, `test`, `install.sh` and the
+desktop packaging all stopped at the same `panic!` for anyone cloning `master`.
+
+- **The three carriers aligned at 0.11.7.** The change in that version is the alignment
+  itself, so it got its own number instead of rewriting 0.11.6 — the history records the
+  defect instead of hiding it.
+- 🔴 **And nobody saw it, because CI had no way to see it.** The `build-windows.yml` trigger
+  listed `src/**` and `Cargo.*`; a commit touching **only** `version.md` did not wake the
+  build. The commit that broke `master` was precisely the one that did not fire CI. Now
+  `version.md` and `build.rs` are in the trigger.
+- **The guard existed; the other half was missing.** `build.rs` **proved** the three agree;
+  nothing **made** them agree. `scripts/sync-version.sh` propagates `version.md` to
+  `Cargo.toml` and `Cargo.lock`, and `--verificar` exits 1 when they diverge (same idiom as
+  `sync-version.mjs` in SHVIA-DESKTOP).
+- **CI now runs `cargo test --locked` and `clippy -D warnings` before the build.** A release
+  build takes minutes; a broken test that only shows up after it costs the whole round.
+  `--locked` is what really guards the lockfile — `build.rs` itself says so.
+
+## 0.11.12 - CI actions get pinned by SHA, the doc's tree becomes the real one, and July's spike goes
+
+Findings **F-09**, **F-10** and **F-21** of the September 2026 review.
+
+- 🟢 **Every `uses:` in the CI is pinned to a commit SHA** (F-09). A GitHub Actions tag is a
+  moving pointer: `actions/checkout@v4` runs whatever the owner publishes under that tag
+  tomorrow, with this workflow's permissions and access to the job token — the vector of the
+  `tj-actions/changed-files` incident, where a moved tag leaked secrets from thousands of
+  repositories. Each SHA carries a comment naming the version, so raising a pin is a decision
+  and not a side effect; the header records the `gh api` calls that resolve a tag.
+  `dtolnay/rust-toolchain` has no tag — `stable` is a *branch*; the SHA freezes the action's
+  code, not the Rust version, which is still whatever is stable that day.
+
+- 🟢 **The `anna.exe` artifact ships with a `.sha256`** (F-09), in the format `sha256sum -c`
+  reads — the same one `release-manifest.mjs` already produces in SHVIA-DESKTOP. Whoever
+  downloads the artifact to package the desktop could not tell whether what arrived is what
+  left here.
+
+- 🟢 **`docs/arquitetura-cli.md` §2 stops describing a plan** (F-10). It listed
+  `api/{mod,sse,types}.rs`, `tools/{mod,fs,edit,shell,git,guard}.rs`, `ui/{mod,repl,tui}.rs`,
+  `cli.rs` and `error.rs` — a per-directory design abandoned early, none of which ever
+  existed. The file was not merely old, it was being **kept old**: the notes for findings
+  F-04 and F-05 were written into the description of a `shell.rs` that is not there. It now
+  lists the 25 real modules with their line counts.
+
+  Ten of those descriptions were first written from the filename and then **corrected against
+  each module's own header** before shipping — `checkpoint.rs` is not a resume point, it
+  photographs the working tree into a commit outside the branch before every approved
+  mutation; `runner.rs` is the Local/Host executor split of ADR-002, not "run an external
+  process"; `frontend.rs` is the trait that makes the engine embeddable. Guessing would have
+  reproduced the exact defect being fixed.
+
+- 🟢 **`spikes/c0-gateway.php` removed** (F-10). `docs/protocolo.md` called it "the reference
+  proof" of the protocol: a July PHP client, untouched since 08/07, that nothing compiled,
+  tested or ran, inside a Rust repository. A reference nobody runs proves nothing and ages
+  silently. The reference is now `src/api.rs` — the client the CLI actually uses, which CI
+  compiles and tests.
+
+- 🟢 **`.continue/estado-atual.md` is framed for what it is** (F-10). The review read it as
+  stale narration; it is a **dated log**, and its 08/07 entry saying C0 is "código pronto,
+  falta EXECUTAR" is accurate *for 08/07*. The real defect is that the log stops at
+  31/07 (0.9.0) while the repo is at 0.11.12, under a title that promises current state. A
+  header now says so and points at `CHANGELOG.md`; the gap is **not** backfilled after the
+  fact.
+
+- 🟢 **`AGENTS.md` and `CLAUDE.md` gained a guard** (F-21). They are already identical here,
+  which is exactly when a guard is worth adding.
+
+**Three new rulers**, all in `src/main.rs::reguas_do_repo`, all running in `cargo test`:
+`toda_action_do_ci_esta_pinada_por_sha` (sweeps the whole workflow directory, so a new
+workflow is measured just by existing, and requires the version comment too),
+`arvore_da_doc_bate_com_src` (both directions: a module missing from the doc, and a doc entry
+missing from `src/`), and `agents_e_claude_sao_espelho`.
+
+**Measured.** 102/102 green, clippy `-D warnings` clean. Five reversions, five reds: an
+action back on a moving tag; a correct SHA without the version comment; a new workflow with a
+loose action; a new module in `src/` with no line in the doc; a doc entry for a module that
+does not exist.
+
+## 0.11.11 - `cargo deny` lands, and passes with an empty exception list
+
+Findings **DEP-3** and **F-31** of the September 2026 review.
+
+None of the three Rust repositories measured RustSec advisories. This one now does, from
+`.github/workflows/build-windows.yml`, next to the `cargo test --locked` and `clippy` that
+already run before the release build.
+
+**It passes with `ignore = []`, and that is the point.** The two Tauri repositories need
+sixteen documented exceptions because of the GTK3 tree they inherit; `anna` has a small
+dependency graph and no GUI toolkit, so it needs none. Writing that down is what makes a
+future exception visible as a change rather than as the status quo.
+
+The empty list is declared explicitly in `deny.toml`, with the note that an entry there is
+debt carrying a written reason — the same doctrine as `scripts/prova-auditoria.mjs` in
+SHVIA-WORKSPACE.
+
+⚠️ **The interesting result is in the sibling repositories**, not here: the same check found
+**19 advisories** in SHVIA-DESKTOP, including the `time = "=0.3.41"` pin that F-31 predicted
+would hide one. See `SHVIA-DESKTOP` 1.4.3.
+
+## 0.11.10 - the repository's only `innerHTML` carrying external data starts escaping
+
+Finding **F-08** of the 01/09/2026 technical review.
+
+`anna stats --html` builds the dashboard by interpolating `DATA` into template literals and
+dropping it into `innerHTML`. The model name comes from the gateway (`telemetry.model`), so it
+is **server data**: a profile named with HTML would execute in the local dashboard of whoever
+ran the command.
+
+Low risk, and it is precisely because it is low that it needed a ruler. Nobody will remember,
+adding a field six months from now, that this file is different from all the others.
+
+**What changed.** An `h()` in the template's JS, applied to every `DATA` value entering an
+HTML context: `r.model`, the row's four numbers, `day[0]`/`day[1]` (the latter inside a
+`title` attribute), the footer's `bits`, and both arguments of `tile()` — the label is always
+a literal, but the value includes `v.model`, and escaping only one would leave the next person
+to decide again.
+
+**It escapes at RENDER time, not at generation in Rust.** `DATA` is also read as a number
+(summing, sorting); escaping at the source would ruin the data for whoever uses it as data.
+
+**The ruler** (`tests_escape_do_dashboard`, 4 cases) sweeps the `TEMPLATE` and fails if any of
+those fields shows up raw again — and also if one of the **already assembled** fragments
+(`${rows}`, `${cells}`, `${foot}`…) is escaped by mistake, which would show them as text on
+screen.
+
+**Measured for real, not by reading.** The binary was rebuilt, the dashboard generated, and
+`h()` was extracted from the output HTML and **executed**: `<img src=x onerror=alert(1)>` comes
+out as `&lt;img src=x onerror=alert(1)&gt;`. On the first attempt the escaper was **not** in
+the generated HTML — the binary predated the change — and only the smoke test showed it.
+Suite **99/99**, clippy clean with `-D warnings`.
+
 ## 0.11.9 - Agent doc: Releases rule and the English-only language rule
 
 Marked echo of the single source at samirhvbr/repodocs. Two rules land here:

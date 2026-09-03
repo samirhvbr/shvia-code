@@ -29,25 +29,66 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 
 /// Chame uma vez no boot (main), com a raiz do projeto. Sem `AI_MEMORY_URL`,
 /// tudo daqui pra frente é no-op.
+/// A `AI_MEMORY_URL` pode receber o hook? `Ok(url normalizada)` ou `Err(motivo)`.
+///
+/// ## Por que é função separada (achado F-07 da revisão de 01/09/2026)
+///
+/// O `init` grava num `OnceLock` — uma vez por processo, e portanto impossível de exercitar
+/// mais de uma vez num teste. A decisão em si é pura e é o que precisa de prova, então ela
+/// sai daqui e o `init` passa a só aplicá-la. Mesma escolha do `politica.mjs` no
+/// SHVIA-DESKTOP e das guardas do `deploy.sh` no WORKSPACE.
+///
+/// ## O que ela decide
+///
+/// O hook manda `bearer_auth` + prompts + 400 chars de cada resultado de tool. Em `http://`
+/// fora do loopback, isso é token e conteúdo de trabalho em claro na rede.
+///
+/// A regra é a MESMA do `SHVIA_URL` — `config::url_seguro`, importada e não recopiada. Ela já
+/// existe, já tem prova (incluindo `http://localhost@atacante.tld` e
+/// `http://127.0.0.1.atacante.tld`), e uma segunda cópia divergiria: divergência em guarda de
+/// segredo é o defeito que esta revisão mais encontrou.
+pub(crate) fn url_de_memoria(bruta: &str) -> Result<String, String> {
+    let u = bruta.trim();
+    if u.is_empty() {
+        return Err("vazia".into());
+    }
+    if !crate::config::url_seguro(u) {
+        return Err(format!(
+            "AI_MEMORY_URL insegura ({u}) — o hook manda token e conteúdo dos turnos. \
+             Use https:// (exceção: http://localhost|127.x|[::1])."
+        ));
+    }
+    Ok(u.trim_end_matches('/').to_string())
+}
+
 pub fn init(cwd: &Path) {
     let _ = MEM.set(match std::env::var("AI_MEMORY_URL") {
-        Ok(url) if !url.trim().is_empty() => {
-            let sid = format!(
-                "anna-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
-            );
-            Some(Mem {
-                url: url.trim().trim_end_matches('/').to_string(),
-                token: std::env::var("AI_MEMORY_TOKEN").ok().filter(|t| !t.trim().is_empty()),
-                session_id: sid,
-                cwd: cwd.display().to_string(),
-                client: reqwest::Client::new(),
-            })
-        }
+        Ok(bruta) if !bruta.trim().is_empty() => match url_de_memoria(&bruta) {
+            Ok(url) => {
+                let sid = format!(
+                    "anna-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                );
+                Some(Mem {
+                    url,
+                    token: std::env::var("AI_MEMORY_TOKEN").ok().filter(|t| !t.trim().is_empty()),
+                    session_id: sid,
+                    cwd: cwd.display().to_string(),
+                    client: reqwest::Client::new(),
+                })
+            }
+            Err(motivo) => {
+                // DESLIGA em vez de recusar o boot: memória é opcional aqui — o `anna`
+                // funciona sem ela, e derrubar a ferramenta por causa de um hook mal
+                // configurado trocaria um vazamento por uma indisponibilidade.
+                eprintln!("aviso: {motivo}\n       Memória de longo prazo DESLIGADA.");
+                None
+            }
+        },
         _ => None,
     });
 }
@@ -115,4 +156,53 @@ pub fn session_end_blocking(rt: &tokio::runtime::Runtime) {
         return;
     }
     rt.block_on(post(m, "session-end", json!({})));
+}
+
+#[cfg(test)]
+mod tests_url_de_memoria {
+    use super::url_de_memoria;
+
+    /// Achado F-07: o hook aceitava qualquer esquema e mandava token + conteúdo.
+    #[test]
+    fn https_passa_e_normaliza() {
+        assert_eq!(url_de_memoria("https://mem.blue3.local/").unwrap(), "https://mem.blue3.local");
+        assert_eq!(url_de_memoria("  https://x.tld/api//  ").unwrap(), "https://x.tld/api");
+    }
+
+    #[test]
+    fn loopback_em_http_passa_porque_nao_sai_da_maquina() {
+        for u in ["http://localhost:8000", "http://127.0.0.1:7000", "http://[::1]:9000"] {
+            assert!(url_de_memoria(u).is_ok(), "deveria passar: {u}");
+        }
+    }
+
+    #[test]
+    fn http_para_fora_e_recusado_com_motivo() {
+        for u in ["http://mem.blue3.local", "http://10.0.0.5:7000", "ftp://x"] {
+            let e = url_de_memoria(u).unwrap_err();
+            assert!(e.contains("insegura"), "motivo pobre para {u}: {e}");
+            // A mensagem tem de dizer O QUE fazer: sem isso o dev desliga a memória
+            // em vez de consertar a URL.
+            assert!(e.contains("https://"), "a mensagem não diz o caminho: {e}");
+        }
+    }
+
+    #[test]
+    fn os_disfarces_de_loopback_nao_passam() {
+        // Herdados da prova do `url_seguro` — o ponto de reusar a função é justamente
+        // não ter de reencontrar estes casos.
+        for u in [
+            "http://localhost.atacante.tld",
+            "http://localhost@atacante.tld",
+            "http://127.0.0.1.atacante.tld",
+            "http://[::1]@atacante.tld",
+        ] {
+            assert!(url_de_memoria(u).is_err(), "deveria recusar: {u}");
+        }
+    }
+
+    #[test]
+    fn vazia_e_recusada_sem_alarde() {
+        assert_eq!(url_de_memoria("   ").unwrap_err(), "vazia");
+    }
 }

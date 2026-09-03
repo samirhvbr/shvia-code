@@ -3,6 +3,19 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.9 - Agent doc: Releases rule and the English-only language rule
+
+Marked echo of the single source at samirhvbr/repodocs. Two rules land here:
+
+1. The `version.md` of the default branch ON GITHUB is what the GitHub Releases
+   show, and a commit that bumps it is not finished until that version has a
+   tag, a Release and the `Latest` badge — same push, not "later".
+2. Everything in this repository is English (US): documents, commit messages,
+   pull requests, issues, code comments. The only carve-out is end-user-facing
+   product strings. History is not rewritten.
+
+Delimited by a marker, so re-running replaces instead of duplicating.
+
 ## 0.11.8 - Regra de Releases no doc de agente: bump e Release sao um ato so
 
 Eco marcado da norma unica em samirhvbr/repodocs (docs/versioning.md). O

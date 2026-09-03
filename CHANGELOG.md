@@ -3,6 +3,20 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.7 - Releases automaticas: o version.md da master vira tag e Release
+
+O GitHub nao deduz versao de mensagem de commit: sem tag, o numero e string no
+`git log` e `git diff` entre versoes nao existe. Entram o
+`.github/workflows/release.yml` e o `tools/release.sh`.
+
+**A regra:** o `version.md` da branch padrao **no GitHub** e o que as Releases
+**no GitHub** refletem. Checkout local nao entra na conta. Um PR nao publica
+nada; no merge, o push do `version.md` dispara o workflow e a Release vira
+aquela versao.
+
+Tag e titulo = a versao pura, sem prefixo `v`. Norma:
+[samirhvbr/repodocs](https://github.com/samirhvbr/repodocs/blob/master/docs/versioning.md).
+
 ## 0.11.6 - Nota do desligamento do COMMITTER passa a citar o T5
 
 - Correção de revisão do dono: a nota do `.committer.yml` cita o T5 pelo nome e o defeito

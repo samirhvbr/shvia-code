@@ -3,6 +3,24 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.19 - the commit rule names every version carrier, not just version.md
+
+The repair in `0.11.18` put the three numbers back in agreement; it did nothing
+to stop them drifting again. The instruction an agent actually reads said only
+*"a versão sempre vem de `version.md` (bumpe no mesmo commit)"* — true, and
+incomplete: it names the authority and stays silent about the two files that
+copy it.
+
+`AGENTS.md` and `CLAUDE.md` now carry a section that names all three carriers,
+says why each one holds the version, and points at the shape of commit where
+this breaks — the doc-only commit, where `Cargo.toml` is never in the diff to be
+noticed. It ends with the one command that answers the question before the
+commit exists, because a rule that needs a person to remember it is the rule
+that already failed twice here.
+
+This is documentation, not a gate. A `pre-push` hook comparing the three would
+make it mechanical, and this repository has no `tools/git-hooks/` yet.
+
 ## 0.11.18 - the version carriers catch up with version.md
 
 `version.md` and the commit subjects reached `0.11.18`, but two other carriers of

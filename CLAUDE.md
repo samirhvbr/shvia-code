@@ -41,6 +41,38 @@ Proibido `feat:`/`fix:`/`chore:` e mensagens vagas.
 
 ---
 
+## Version carriers — three files hold the version, and they move together
+
+`version.md` is the authority, but it is not the only file that states the
+version. Three do, and a bump that moves only one is not a bump:
+
+| File | Why it holds the version |
+|---|---|
+| `version.md` | The authority. What the Releases on GitHub must match. |
+| `Cargo.toml` | What `anna --version` prints — and what SHVIA-DESKTOP's `stage-anna.mjs` reads to enforce its version floor before packaging the engine. |
+| `CHANGELOG.md` | The `## X.Y.Z` heading **is** the commit subject. |
+
+**A doc-only commit is where this breaks.** Every time it has happened, the
+commit touched `AGENTS.md`/`CLAUDE.md` and `version.md` and nothing else, so
+`Cargo.toml` was never in the diff to be noticed: the 0.11.2 bump went halfway,
+then 0.11.16, 0.11.17 and 0.11.18 did too, leaving the manifest three versions
+behind and this changelog two. Nothing warned, either time, because nothing
+checks — the comment in `Cargo.toml` says the old claim that `build-local.sh`
+verified it was simply false.
+
+Before committing a bump, one command says whether the carriers agree:
+
+```bash
+printf 'version.md  %s\nCargo.toml  %s\nCHANGELOG   %s\n' \
+  "$(cat version.md)" \
+  "$(grep -m1 '^version' Cargo.toml | tr -d ' "' | cut -d= -f2)" \
+  "$(grep -m1 '^## ' CHANGELOG.md | sed 's/## //; s/ -.*//')"
+```
+
+Three identical numbers, or the bump is not finished.
+
+---
+
 ## Regras do produto (não relitigar sem ADR)
 
 - **Loop no cliente**: tools executam localmente; servidor stateless de tools.

@@ -3,6 +3,46 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.18 - the version carriers catch up with version.md
+
+`version.md` and the commit subjects reached `0.11.18`, but two other carriers of
+the same number did not: `Cargo.toml` was still on `0.11.15`, three bumps behind,
+and this changelog stopped at `0.11.16`. A clone built from `master` produced a
+binary that introduced itself as `0.11.15`.
+
+The comment above the version field in `Cargo.toml` had already recorded this
+exact failure once — *"é como o bump da 0.11.2 saiu pela metade sem nada
+acusar"*. It went halfway again, three releases in a row, and again nothing
+accused it: the two commits that moved `version.md` (`fa7c331`, `7637732`)
+touched only `AGENTS.md`, `CLAUDE.md` and `version.md`, so the manifest was never
+in the diff to be noticed.
+
+Found on 05/09/2026 while packaging `anna` into the SHVIA-DESKTOP release, where
+`stage-anna.mjs` prints the version it is bundling. The binary reported
+`0.11.18`, matching the working tree, because the fix had been made locally and
+left uncommitted. Nothing shipped wrong — the sources were the committed ones —
+but the number was true only on this machine.
+
+The two entries below were written on the same day, after their commits, from
+the diffs themselves.
+
+## 0.11.18 - the human gate becomes the refused push, not the commit
+
+Reconstructed entry — the commit (`7637732`) landed without one. It regenerated
+the `COMMIT-RULE` echo block in `AGENTS.md` and `CLAUDE.md` from repodocs, adding
+the paragraph that makes the push part of the delivery: a clean push needs
+nobody's permission and is never held for review, while a refused push —
+conflict, non-fast-forward, protected branch — is exactly where a human enters,
+and is never answered with a force or an invented merge.
+
+## 0.11.17 - the agent doc stops contradicting the COMMIT-RULE block
+
+Reconstructed entry — the commit (`fa7c331`) landed without one. It regenerated
+the same echo block, adding the clause that a repository may override the bump
+rule *in writing*, and only in writing: an override nobody wrote down is not an
+exception. The changelog entry, the subject format, the language and one subject
+per commit hold regardless.
+
 ## 0.11.16 - COMMIT-RULE replaces the COMMITTER delegation: the agent commits again
 
 The `PS — Commits: a skill COMMITTER cuida disso` block in this repository's

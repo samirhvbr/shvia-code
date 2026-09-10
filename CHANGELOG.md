@@ -3,6 +3,24 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.21 - the NDJSON protocol gains stop_request for engines that can hold a turn open
+
+Block B1 of `SHVIA-DESKTOP/docs/code/RUN-20260910.md` (ADR-034 there). `docs/embedding.md`
+documents one optional event and its answer: `stop_request`, emitted by an engine that can
+**hold a turn open** when the model wants to end it, blocking until the host answers
+`continue` (with the message the model reads as its reason to go on) or `stop`. Ceiling of
+60 s → `stop`; stdin closed → `stop`; only emitted when the host asked for it at spawn, so an
+old host with a new engine keeps working unchanged. The decision is never the engine's.
+
+**`anna` does not change.** Its turn ends when the model returns no tool call — there is
+nothing to hold open — so it never emits the event, and the host continues between turns
+by sending the next `user` line, as always. The emitter today is the `claude-runner` of
+SHVIA-DESKTOP (its SDK has a `Stop` hook); the `codex-runner` has no hook surface.
+
+The three version carriers agree again: 0.11.20 moved `version.md` and this file and left
+`Cargo.toml` at 0.11.19 (and the lockfile with it) — the half-bump the CLAUDE.md of this
+repository describes, one more time. This commit moves the four together.
+
 ## 0.11.20 - the git hooks arrive from repodocs and are enabled here
 
 Both hooks of the standard now run here: `commit-msg`, which checks the shape of

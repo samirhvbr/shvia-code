@@ -31,6 +31,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | `{"type":"user","text":"..."}` | inicia um turno (modo persistente) |
 | `{"type":"exit"}` | encerra o motor |
 | `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`** (o `id` correlaciona a proposta; o motor bloqueia por ordem, então o `id` é conferência) |
+| `{"id":"…","decision":"continue"\|"stop","message":"…"}` | **answer to a `stop_request`** (engines that hold a turn open — see the handshake below; `anna` never asks) |
 
 ### `anna` → Host (stdout)
 
@@ -43,6 +44,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | `gate_request` | `id`, `scope`, `policy`, `preview` | **pede aprovação** — o motor BLOQUEIA até a decisão (`id` = o `tool_call.id`, casa com o `tool_result`) |
 | `usage` | `tokens`, `cost`, `estimated` | telemetria do turno |
 | `turn_done` | — | turno terminou; pode mandar o próximo `user` |
+| `stop_request` | `id`, `iteration`, `last`, `reason` | **optional, per engine** — the model wants to end the turn and the engine asks the host whether to continue; **BLOCKS** until the answer. `anna` does not emit it |
 | `error` / `warn` | `message` | erro fatal do turno / aviso |
 
 `policy` ∈ `auto` (nunca pede) · `confirm` (`approve`/`always`/`reject`) ·
@@ -73,6 +75,49 @@ anna → {"type":"tool_result","name":"edit_file","content":"ok — src/x.rs edi
 ```
 
 Se o stdin fechar com um `gate_request` pendente, o motor **nega** (seguro).
+
+### The stop handshake (`stop_request`) — optional, per engine
+
+> Added on 10/09/2026 for the **Run** of the desktop's Code mode
+> (`SHVIA-DESKTOP/docs/code/RUN-20260910.md`, ADR-034). It exists so that a host can
+> continue a turn **without paying a new turn**: on an engine that can hold the turn
+> open, the "continue" keeps the model's context intact. `anna` cannot hold a turn open
+> — its turn ends when the model returns no tool call — so `anna` **never emits it**; for
+> `anna` the host continues between turns, by sending the next `user` line as always.
+
+Who emits it today: the `claude-runner` of SHVIA-DESKTOP (its SDK has a `Stop` hook).
+The `codex-runner` has no hook surface and does not emit it either.
+
+```
+engine → host   {"type":"stop_request","id":"s-7","iteration":7,
+                 "last":"Etapa 1 concluída… Posso seguir para a API?",
+                 "reason":"model_stopped"}                        (BLOCKS)
+host → engine   {"id":"s-7","decision":"continue","message":"Continue conforme o plano. Não peça confirmação entre etapas."}
+             |  {"id":"s-7","decision":"stop"}
+```
+
+- `last` is the last assistant text, cut at 4.000 characters **keeping the tail, not the
+  head**; the host already has the full text from the `text` deltas. The end is what must
+  survive: the execution contract asks the model to close with its marker
+  (`RUN_DONE:`/`NEEDS_INPUT:`) and the host's rule reads the closing paragraphs, so the
+  head is the report and the tail is the decision. Measured on 10/09/2026: with the head
+  kept, a closing summary over 4.000 characters flipped every tier of the rule to
+  `continue`.
+- `iteration` counts the stop requests of this turn in the engine, so the host can
+  correlate it with its own count.
+- `continue` keeps the turn alive: the engine hands `message` to the model as the reason
+  to go on, and the turn proceeds in the same context. `stop` lets the turn end exactly
+  as it would without the handshake — `usage`, then `turn_done`.
+- **Only emitted when the host asked for it at spawn** (a flag of the engine). A host
+  that does not know the event never receives it, so an old host with a new engine keeps
+  working unchanged.
+- **Ceiling of 60 s per request.** No answer in time → `stop`. This is what keeps a
+  closed or busy host from hanging a turn: the turn ends normally and the host can still
+  continue between turns.
+- stdin closed with a `stop_request` pending → `stop`, the same safe default the gates
+  use for `reject`.
+- The decision is never the engine's to make: whoever answers (the desktop page, on
+  behalf of the server's orchestrator) is who decides. The engine only asks.
 
 ## Exemplo de turno
 

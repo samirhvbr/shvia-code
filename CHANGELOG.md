@@ -3,6 +3,25 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.22 - the stop_request contract says which end of the last message survives
+
+`docs/embedding.md` said `last` was "cut at 4.000 characters" and left the reader to guess
+which end it kept. The obvious reading is the head, and the head is the wrong half.
+
+The emitter measured it first: `parada.mjs` of SHVIA-DESKTOP cut the head until 1.5.4, and
+the skeptical panel of 10/09/2026 (SHVIA-WEB #110) found that a closing summary over 4.000
+characters flipped **every tier** of the host's rule to `continue` — the model had written
+`NEEDS_INPUT:` at the end and the marker was the part thrown away. It now keeps the tail
+(`texto.slice(-LAST_MAX)`), and this document now says so.
+
+This matters here and not only there because this file is the **contract**, not one
+implementation of it: a second engine written against the old wording would reproduce the
+defect that was already measured and fixed, and nothing in the protocol would catch it.
+The rule stated: the execution contract asks the model to close with its marker, the host
+reads the closing paragraphs, so the head is the report and the tail is the decision.
+
+No change to the event, the handshake, or any code. `anna` still never emits it.
+
 ## 0.11.21 - the NDJSON protocol gains stop_request for engines that can hold a turn open
 
 Block B1 of `SHVIA-DESKTOP/docs/code/RUN-20260910.md` (ADR-034 there). `docs/embedding.md`

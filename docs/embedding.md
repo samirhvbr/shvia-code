@@ -96,8 +96,13 @@ host → engine   {"id":"s-7","decision":"continue","message":"Continue conforme
              |  {"id":"s-7","decision":"stop"}
 ```
 
-- `last` is the last assistant text, cut at 4.000 characters; the host already has the
-  full text from the `text` deltas.
+- `last` is the last assistant text, cut at 4.000 characters **keeping the tail, not the
+  head**; the host already has the full text from the `text` deltas. The end is what must
+  survive: the execution contract asks the model to close with its marker
+  (`RUN_DONE:`/`NEEDS_INPUT:`) and the host's rule reads the closing paragraphs, so the
+  head is the report and the tail is the decision. Measured on 10/09/2026: with the head
+  kept, a closing summary over 4.000 characters flipped every tier of the rule to
+  `continue`.
 - `iteration` counts the stop requests of this turn in the engine, so the host can
   correlate it with its own count.
 - `continue` keeps the turn alive: the engine hands `message` to the model as the reason

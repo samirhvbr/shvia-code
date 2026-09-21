@@ -912,9 +912,20 @@ fn escapa_da_raiz(tok: &str) -> bool {
 ///    `credentials`, `/.ssh/`, `/.aws/`, `.git/` — a mesma lista das tools de arquivo;
 ///  - caminho **absoluto** (`/etc/...`) ou de **home** (`~/...`): fora da raiz do projeto;
 ///  - `..` que **escapa** da raiz;
-///  - caminho com **expansão de variável** (`$HOME/x`, `"$dir/y"`): o valor só existe na hora,
-///    então não há o que conferir. `grep "$padrao" arquivo` continua passando — o token do
-///    padrão não parece caminho.
+///  - **qualquer token com expansão de variável** (`$HOME/x`, `"$dir/y"`, `$SHVIA_API_KEY`):
+///    o valor só existe na hora, então não há o que conferir.
+///
+///    🔴 **Mudou em 21/09/2026, e a versão anterior desta linha dizia o oposto.** Ela dizia que
+///    `grep "$padrao" arquivo` *"continua passando — o token do padrão não parece caminho"*, e
+///    era verdade: a checagem de `$` ficava ATRÁS do portão `if !parece_caminho { continue; }`.
+///    O caso que o autor tinha em mente era um padrão de busca. O caso que ninguém enumerou era
+///    `echo $SHVIA_API_KEY`: `echo` está na ALLOWLIST, `$SHVIA_API_KEY` não tem `~`, `.` nem
+///    `/`, então o `continue` disparava, a checagem nunca rodava, e a chave da instalação voltava
+///    ao modelo em `Policy::Auto` — sem cartão.
+///
+///    ⚠️ **O preço está pago de propósito:** `grep "$padrao" arquivo` passa a pedir aprovação.
+///    Uma variável que vira argumento é exatamente o que um cartão existe para mostrar, e a
+///    alternativa — decidir pelo NOME da variável — falha aberta na primeira que ninguém listou.
 ///
 /// **O que ela NÃO fecha, e fica escrito em vez de mascarado:** busca recursiva
 /// (`grep -r X .`, `rg X`) segue em `Auto` e pode imprimir uma linha de dentro de um `.env`
@@ -933,8 +944,60 @@ fn argumento_de_caminho_recusado(seg: &str) -> Option<String> {
         if !parece_caminho {
             continue; // padrão, glob, nome de script — não é caminho
         }
-        if tok.starts_with('/') || tok.starts_with('~') || tok.contains('$') || escapa_da_raiz(&tok) {
+        if tok.starts_with('/') || tok.starts_with('~') || escapa_da_raiz(&tok) {
             return Some(tok);
+        }
+    }
+    None
+}
+
+/// Expansão de variável (`$VAR`, `${VAR}`) **fora de aspa simples**.
+///
+/// 🔴 Medido em 21/09/2026: `echo $SHVIA_API_KEY` era `Policy::Auto`. A checagem de `$` vivia
+/// dentro de `argumento_de_caminho_recusado`, atrás do portão `if !parece_caminho { continue; }`
+/// — e `$SHVIA_API_KEY` não tem `~`, `.` nem `/`. O `continue` disparava primeiro, a checagem
+/// nunca rodava, e a chave da instalação voltava ao modelo sem cartão nenhum.
+///
+/// ⚠️ **A regra de aspa é a MESMA do `dividir_por_and`**, e isso não é coincidência: ali
+/// `$(…)` e crase já são recusados com `aspa != Some('\'')`, porque o shell expande os dois em
+/// tudo que não seja aspa simples. Uma variável obedece à mesma regra, e conferi-la no segmento
+/// CRU — com as aspas ainda de pé — é o que permite distinguir `echo '$(whoami)'` (literal,
+/// segue `Auto`) de `echo "$HOME"` (expande, pede cartão). O `tokens()` não serve aqui: ele
+/// resolve as aspas de propósito e perde justamente essa informação.
+///
+/// ⚠️ **O preço, declarado:** `grep "$padrao" arquivo` passa a pedir aprovação. Uma variável que
+/// vira argumento é exatamente o que um cartão existe para mostrar, e a alternativa — decidir
+/// pelo NOME da variável — falha aberta na primeira que ninguém listou.
+fn expansao_de_variavel(seg: &str) -> Option<String> {
+    let mut aspa: Option<char> = None;
+    let mut it = seg.chars().peekable();
+
+    while let Some(ch) = it.next() {
+        match aspa {
+            Some(a) => {
+                if ch == a {
+                    aspa = None;
+                }
+                // Dentro de aspa SIMPLES o `$` é literal; dentro da dupla, não.
+                if a == '"' && ch == '$' {
+                    if let Some(&p) = it.peek() {
+                        if p.is_ascii_alphanumeric() || p == '_' || p == '{' {
+                            return Some(seg.to_string());
+                        }
+                    }
+                }
+            }
+            None => match ch {
+                '\'' | '"' => aspa = Some(ch),
+                '$' => {
+                    if let Some(&p) = it.peek() {
+                        if p.is_ascii_alphanumeric() || p == '_' || p == '{' {
+                            return Some(seg.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            },
         }
     }
     None
@@ -947,6 +1010,9 @@ fn segmento_permitido(seg: &str) -> bool {
     }
     // Antes da lista: nenhum comando de leitura é `Auto` se o ARGUMENTO não for defensável.
     if argumento_de_caminho_recusado(c).is_some() {
+        return false;
+    }
+    if expansao_de_variavel(c).is_some() {
         return false;
     }
     if let Some(ok) = leitura_condicional(c) {
@@ -1289,6 +1355,52 @@ mod tests {
         assert_eq!(d.len(), 1, "modo host deve oferecer 1 ferramenta");
         assert_eq!(d[0].name, "bash");
         assert!(defs().len() > 1, "modo local oferece o conjunto todo");
+    }
+
+    /// 🔴 `echo $SHVIA_API_KEY` devolvia a chave ao modelo sem cartão nenhum.
+    ///
+    /// Medido em 21/09/2026: em `argumento_de_caminho_recusado`, a checagem de `$` estava
+    /// ATRÁS do portão `if !parece_caminho { continue; }`. E `parece_caminho` exige `~`, `.`
+    /// ou `/` — `$SHVIA_API_KEY` não tem nenhum dos três, então o `continue` disparava e a
+    /// linha do `$` nunca rodava. `echo` está na ALLOWLIST, logo: `Policy::Auto`.
+    ///
+    /// ⚠️ **O produto inteiro é desenhado em volta de não expor essa chave** — nunca por
+    /// argumento de CLI (apareceria no `ps`), `config.toml` em 0600 com aviso de permissão
+    /// frouxa, `.env` e `*.pem` na denylist. E a porta aberta era o comando mais simples que
+    /// existe, com a saída voltando direto para o modelo.
+    #[test]
+    fn expansao_de_variavel_nunca_e_auto() {
+        assert_ne!(classify("echo $SHVIA_API_KEY"), Policy::Auto,
+            "a chave da instalação volta ao modelo sem cartão");
+        assert_ne!(classify("echo ${SHVIA_API_KEY}"), Policy::Auto,
+            "a forma com chaves escapava do mesmo jeito");
+        assert_ne!(classify("printf %s $OPENAI_API_KEY"), Policy::Auto);
+        assert_ne!(classify("echo $HOME"), Policy::Auto,
+            "não dá para decidir por NOME de variável: quem lista segredo esquece o próximo");
+    }
+
+    /// 🔴 Controle POSITIVO, e é o preço que o docblock da guarda já declarava.
+    ///
+    /// Fechar a expansão de variável faz `grep "$padrao" arquivo` passar a pedir aprovação —
+    /// o docblock dizia, antes desta mudança, que ele *"continua passando"*. Passou a não
+    /// passar, de propósito: uma variável que vira argumento é exatamente o que um cartão
+    /// existe para mostrar. O que NÃO pode acontecer é o resto da leitura cair junto.
+    #[test]
+    fn leitura_sem_variavel_continua_rodando_sozinha() {
+        assert_eq!(classify("ls -la"), Policy::Auto);
+        assert_eq!(classify("grep padrao arquivo.txt"), Policy::Auto);
+        assert_eq!(classify("cat src/main.rs"), Policy::Auto);
+        assert_eq!(classify("git status"), Policy::Auto);
+
+        /* 🔬 Este caso nasceu de uma REVERSÃO que passou quando devia acusar. Tirar o
+         * tratamento de aspa SIMPLES do `expansao_de_variavel` não quebrava nada, porque o
+         * único caso entre aspas simples que a régua tinha era `echo '$(whoami)'` — e ali o
+         * `$` vem seguido de `(`, que o casamento de nome de variável não aceita. O ramo da
+         * aspa simples nunca era exercitado. Uma variável SIMPLES entre aspas simples é o que
+         * o prende. */
+        assert_eq!(classify("echo '$HOME'"), Policy::Auto,
+            "dentro de aspa simples o shell não expande — recusar aqui é conserto demais");
+        assert_eq!(classify("grep '$padrao' arquivo.txt"), Policy::Auto);
     }
 
     #[test]

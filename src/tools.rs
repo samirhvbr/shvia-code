@@ -387,7 +387,10 @@ fn executar_bash(root: &Path, command: &str, teto: Option<Duration>) -> String {
             let _ = filho.wait();
             false
         }
-        Some(t) => esperar_ou_matar(&mut filho, t),
+        Some(t) => {
+            let arvore = Arvore::prender(&filho);
+            esperar_ou_matar(&mut filho, t, &arvore)
+        }
     };
 
     let code = filho.wait().ok().and_then(|st| st.code()).unwrap_or(-1);
@@ -420,7 +423,7 @@ fn ler_em_thread<R: std::io::Read + Send + 'static>(mut r: R) -> std::thread::Jo
 }
 
 /// Espera o filho até o teto. Devolve `true` se estourou (e matou).
-fn esperar_ou_matar(filho: &mut Child, teto: Duration) -> bool {
+fn esperar_ou_matar(filho: &mut Child, teto: Duration, arvore: &Arvore) -> bool {
     let limite = Instant::now() + teto;
     loop {
         match filho.try_wait() {
@@ -429,12 +432,88 @@ fn esperar_ou_matar(filho: &mut Child, teto: Duration) -> bool {
             Err(_) => return false,
         }
         if Instant::now() >= limite {
-            matar_grupo(filho);
+            arvore.matar(filho);
             return true;
         }
         // 50 ms: o suficiente para não virar espera ocupada e curto o bastante para o
         // teto valer o que diz. Um comando que termina não espera mais que isso.
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The process tree of one `bash` call, so the ceiling can kill all of it, not just the `sh`.
+///
+/// On unix the tree is the process group that `process_group(0)` created at spawn, and
+/// killing it is `matar_grupo`. Nothing to hold.
+#[cfg(not(windows))]
+struct Arvore;
+
+#[cfg(not(windows))]
+impl Arvore {
+    fn prender(_filho: &Child) -> Self {
+        Arvore
+    }
+
+    fn matar(&self, filho: &mut Child) {
+        matar_grupo(filho);
+    }
+}
+
+/// On Windows the tree is a Job Object. Windows has no process group, and walking parent
+/// PIDs (`taskkill /T`, 0.11.32) does not reach everything: the Windows CI measured
+/// `o_neto_morre_junto_com_o_pai` still hanging with it. Under Git for Windows' `sh`, a
+/// grandchild whose parent already exited has no parent link left to walk, while job
+/// membership is inherited at process creation and survives that.
+///
+/// No KILL_ON_JOB_CLOSE: a command that ends normally keeps whatever it started in the
+/// background, as before. Only the ceiling terminates the job. A child that spawns before
+/// `AssignProcessToJobObject` runs escapes the job; the window is the time between
+/// `spawn()` returning and the next line, and `taskkill` stays as the fallback.
+#[cfg(windows)]
+struct Arvore(Option<windows_sys::Win32::Foundation::HANDLE>);
+
+#[cfg(windows)]
+impl Arvore {
+    fn prender(filho: &Child) -> Self {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        // SAFETY: plain Win32 calls with null attributes and name; the process handle
+        // belongs to `filho`, which outlives this call; on failure the job handle is closed.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Arvore(None);
+            }
+            if AssignProcessToJobObject(job, filho.as_raw_handle() as _) == 0 {
+                CloseHandle(job);
+                return Arvore(None);
+            }
+            Arvore(Some(job))
+        }
+    }
+
+    fn matar(&self, filho: &mut Child) {
+        match self.0 {
+            // SAFETY: `job` is a live handle owned by this struct until Drop.
+            Some(job) => unsafe {
+                windows_sys::Win32::System::JobObjects::TerminateJobObject(job, 1);
+            },
+            None => matar_grupo(filho),
+        }
+        let _ = filho.kill();
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Arvore {
+    fn drop(&mut self) {
+        if let Some(job) = self.0 {
+            // SAFETY: closes the handle this struct owns, exactly once.
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(job);
+            }
+        }
     }
 }
 
@@ -463,7 +542,19 @@ fn matar_grupo(filho: &mut Child) {
 
 #[cfg(not(unix))]
 fn matar_grupo(filho: &mut Child) {
-    // Sem grupo de processos portátil aqui; mata o filho direto.
+    // Windows has no process group to signal, and `filho.kill()` alone ends only the
+    // `sh`: the grandchild (`sleep`, `node`, the test binary) kept the output pipe open
+    // and the read hung until it exited, which is the hang the ceiling exists to stop.
+    // The Windows CI measured it once 0.11.27 stopped hiding test failures.
+    // `taskkill /T` walks the tree by parent PID; `/F` because a hung process will not
+    // answer a polite close.
+    let _ = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &filho.id().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    // Belt and braces, as on unix: if taskkill is missing or the tree is already gone,
+    // the child still dies.
     let _ = filho.kill();
 }
 
@@ -1126,28 +1217,36 @@ mod tests {
         // o pipe — e a leitura da saída ficaria pendurada exatamente como antes.
         let dir = sandbox();
         let marca = dir.join("neto.pid");
-        let cmd = format!(
-            "sh -c 'echo $$ > {}; sleep 30' & wait",
-            marca.display()
-        );
+        // Forward slashes and double quotes: on Windows `display()` gives `C:\Users\...`,
+        // and the inner `sh` would read those backslashes as escapes and write the PID
+        // somewhere else. Git for Windows' `sh` accepts `C:/...`.
+        let caminho = marca.display().to_string().replace('\\', "/");
+        let cmd = format!("sh -c 'echo $$ > \"{caminho}\"; sleep 30' & wait");
+        // The ceiling has to outlast the grandchild's birth. Git for Windows' `sh` forks
+        // slowly enough that at 500 ms the Job Object (0.11.33) killed the tree before the
+        // grandchild had written its PID, and the test had nothing to measure.
+        let teto = Duration::from_millis(if cfg!(windows) { 3000 } else { 500 });
         let t0 = Instant::now();
-        let out = executar_bash(&dir, &cmd, Some(Duration::from_millis(500)));
+        let out = executar_bash(&dir, &cmd, Some(teto));
         assert!(out.contains("ERRO: timeout"), "saída: {out}");
-        assert!(t0.elapsed() < Duration::from_secs(5), "não voltou a tempo");
+        assert!(t0.elapsed() < teto + Duration::from_secs(5), "não voltou a tempo");
 
         // O neto tem de estar morto. `kill -0` responde se o processo existe.
         let pid = std::fs::read_to_string(&marca).unwrap_or_default().trim().to_string();
         assert!(!pid.is_empty(), "o neto nem chegou a nascer — o teste não mede nada");
         std::thread::sleep(Duration::from_millis(200));
-        let vivo = Command::new("kill")
-            .arg("-0")
-            .arg(&pid)
+        // `sh`'s builtin `kill`, not a `kill` binary: the PID is the one `sh` printed (on
+        // Windows an MSYS PID, which only that runtime resolves), and a binary missing from
+        // PATH made `unwrap_or(false)` read "could not run" as "dead", a pass that measured
+        // nothing. A shell that cannot run fails the test instead.
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(format!("kill -0 {pid}"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .map(|st| st.success())
-            .unwrap_or(false);
-        assert!(!vivo, "o neto {pid} sobreviveu — o kill não alcançou o grupo");
+            .expect("sh para conferir o neto");
+        assert!(!status.success(), "o neto {pid} sobreviveu — o kill não alcançou o grupo");
     }
 
     #[test]

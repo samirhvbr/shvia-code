@@ -774,6 +774,9 @@ mod reguas_do_repo {
         let raiz = Path::new(env!("CARGO_MANIFEST_DIR"));
         let doc = std::fs::read_to_string(raiz.join("docs/arquitetura-cli.md"))
             .expect("docs/arquitetura-cli.md legível");
+        // A Windows checkout with core.autocrlf=true has CRLF here, and "\nsrc/\n" never
+        // matched: the ruler panicked before measuring anything (Windows CI, 0.11.27).
+        let doc = doc.replace("\r\n", "\n");
 
         // O bloco de código da §2 — entre a linha `src/` e a cerca que o fecha.
         let inicio = doc.find("\nsrc/\n").expect("a §2 tem o bloco da árvore começando em `src/`");

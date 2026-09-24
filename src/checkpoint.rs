@@ -30,7 +30,11 @@ fn now_secs() -> i64 {
 
 fn git(root: &Path, envs: &[(&str, String)], args: &[&str]) -> Option<String> {
     let mut c = Command::new("git");
-    c.current_dir(root).args(args);
+    // `core.autocrlf=false`: the photo and the rollback must be byte-exact. With the
+    // user's autocrlf=true (the Windows default), `restore` converted LF to CRLF on the way
+    // back, so a rollback rewrote the line endings of files the dev never touched.
+    // Repository .gitattributes still apply, and they round-trip on their own.
+    c.current_dir(root).args(["-c", "core.autocrlf=false"]).args(args);
     for (k, v) in envs {
         c.env(k, v);
     }
@@ -106,6 +110,10 @@ pub fn restore(root: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// `LAST_SNAPSHOT` is a process-wide debounce (30 s), so two tests that snapshot in
+    /// parallel would make the second one get `None`. They take this lock and reset it.
+    static FOTO: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn git_sandbox(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("anna-ckpt-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -125,6 +133,8 @@ mod tests {
 
     #[test]
     fn snapshot_e_restore_devolvem_o_estado_da_foto() {
+        let _foto = FOTO.lock().unwrap_or_else(|e| e.into_inner());
+        LAST_SNAPSHOT.store(0, Ordering::Relaxed);
         let dir = git_sandbox("roundtrip");
         std::fs::write(dir.join("a.txt"), "estado na foto\n").unwrap();
         let sha = snapshot(&dir, "teste").expect("snapshot deveria fotografar");
@@ -135,6 +145,29 @@ mod tests {
         // Branch/índice intocados: HEAD segue no commit "init".
         let head = git(&dir, &[], &["log", "-1", "--pretty=%s"]).unwrap();
         assert_eq!(head, "init");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn o_restore_devolve_os_bytes_exatos_mesmo_com_autocrlf() {
+        // Windows runners (and many Windows installs) have core.autocrlf=true, and with it
+        // the restore wrote "estado na foto\r\n" back over a file that was LF in the photo:
+        // a rollback that changes the user's line endings. autocrlf=true converts on
+        // checkout on every OS, so this reproduces here what the Windows CI measured.
+        let _foto = FOTO.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = git_sandbox("autocrlf");
+        let o = Command::new("git")
+            .current_dir(&dir)
+            .args(["config", "core.autocrlf", "true"])
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+        std::fs::write(dir.join("a.txt"), "estado na foto\n").unwrap();
+        LAST_SNAPSHOT.store(0, Ordering::Relaxed);
+        snapshot(&dir, "teste").expect("snapshot deveria fotografar");
+        std::fs::write(dir.join("a.txt"), "estragado depois\n").unwrap();
+        restore(&dir).expect("restore");
+        assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), b"estado na foto\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

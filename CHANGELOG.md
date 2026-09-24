@@ -3,6 +3,91 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.34 - the grandchild test measures on Windows instead of racing the fork
+
+With the Job Object (0.11.33) the Windows run returned in 1.78 s instead of 30 s, the kill
+worked, and `o_neto_morre_junto_com_o_pai` then failed on its own premise: *"o neto nem
+chegou a nascer"*. Three test defects, none in the product:
+
+- **The PID path.** `display()` gives `C:\Users\...`, and inside the inner `sh -c` those
+  backslashes are escapes, so the PID was written somewhere else. It now passes the path
+  with forward slashes, in double quotes.
+- **The ceiling raced the fork.** Git for Windows' `sh` forks slowly; at 500 ms the job
+  killed the tree before the grandchild existed. The ceiling is 3 s on Windows and stays
+  500 ms elsewhere.
+- **The liveness check could pass without measuring.** It ran a `kill` binary and read
+  "could not run" as "dead" (`unwrap_or(false)`). It now uses `sh`'s builtin `kill -0`,
+  which resolves the PID `sh` printed, and a shell that cannot run fails the test.
+
+Reversal on Linux: with the tree kill replaced by `filho.kill()` the test fails
+(*"não voltou a tempo"*, 30 s).
+
+## 0.11.33 - on Windows the ceiling kills the tree through a Job Object
+
+0.11.32's `taskkill /T /F` was not enough. On its branch the Windows runner passed
+`comando_que_trava_e_morto_no_teto` and still failed `o_neto_morre_junto_com_o_pai` with
+*"não voltou a tempo"*. `taskkill /T` walks parent PIDs, and under Git for Windows' `sh` a
+grandchild whose parent already exited has no parent link left to walk.
+
+Each timed `bash` call now holds its process tree (`Arvore`): on Windows a Job Object the
+`sh` is assigned to right after `spawn()`. Job membership is inherited at process creation,
+so it survives what breaks the parent links. The ceiling calls `TerminateJobObject`.
+`taskkill` stays as the fallback when the job cannot be created or assigned. There is no
+KILL_ON_JOB_CLOSE, so a command that ends normally keeps what it started in the background,
+as before. On unix `Arvore` is the existing process group and `matar_grupo`, unchanged.
+
+New Windows-only dependency: `windows-sys` 0.59 (features `Win32_Foundation`,
+`Win32_Security`, `Win32_System_JobObjects`), already in the tree through tokio/mio; the
+lockfile gains one line.
+
+Checked: clippy `-D warnings` for `x86_64-pc-windows-gnu` compiles the Windows branch;
+Linux tests 105 passed; `cargo deny check advisories` ok. Whether the job reaches the
+grandchild is measured only by `build-windows` on this branch.
+
+## 0.11.32 - the bash time ceiling kills the process tree on Windows too
+
+On Windows `matar_grupo` only called `filho.kill()`, which ends the `sh` and leaves the
+grandchild (`sleep`, `node`, a test binary) holding the output pipe. Reading the output
+then waited for the grandchild, which is the hang the F-04 ceiling exists to stop. The
+Windows CI measured it once 0.11.27 stopped hiding test failures:
+`comando_que_trava_e_morto_no_teto` and `o_neto_morre_junto_com_o_pai` both failed there.
+(0.11.28 fixed the same two tests on Linux, where the cause was different: `kill` needed `--`.)
+
+It now runs `taskkill /T /F /PID <pid>`, which walks the tree by parent PID, and keeps
+`filho.kill()` as the fallback.
+
+Checked: `cargo clippy --target x86_64-pc-windows-gnu --all-targets -D warnings` compiles
+the Windows branch cleanly. Whether it kills the tree is measured only on the Windows
+runner; this delivery lands after `build-windows` is green on its branch.
+
+## 0.11.31 - the doc-tree ruler reads a CRLF checkout
+
+`arvore_da_doc_bate_com_src` looked for `"\nsrc/\n"` in `docs/arquitetura-cli.md`, and a
+Windows checkout with `core.autocrlf=true` has CRLF there, so the ruler panicked with *"a §2
+tem o bloco da árvore começando em `src/`"* before measuring anything. It now normalizes
+`\r\n` to `\n` after reading the doc. The repository has no `.gitattributes`, and the fix
+stays in the ruler rather than forcing LF on every Windows clone.
+
+Measured by converting the doc to CRLF locally: with the normalization the ruler passes;
+without it, it fails as on the Windows runner.
+
+## 0.11.30 - a checkpoint restore gives back the exact bytes, line endings included
+
+`/rollback` rewrote line endings. The checkpoint's git calls inherited the user's
+`core.autocrlf`, and with `true` (the Windows default) `git restore` converted LF to CRLF on
+the way back: a file that was `"estado na foto\n"` in the photo came back as
+`"estado na foto\r\n"`. That is what the Windows CI measured once 0.11.27 stopped hiding
+test failures (`snapshot_e_restore_devolvem_o_estado_da_foto`).
+
+Every checkpoint git call now runs with `-c core.autocrlf=false`, so the photo and the
+rollback are byte-exact. Repository `.gitattributes` still apply and round-trip on their own.
+
+New test `o_restore_devolve_os_bytes_exatos_mesmo_com_autocrlf` sets `core.autocrlf=true` in
+its sandbox. autocrlf converts on checkout on every OS, so it reproduces the defect on Linux
+too: without the fix it fails with the restored bytes ending in `13, 10`. The two snapshot
+tests now share a lock, because the 30 s debounce is process-wide and would make the second
+one flaky in parallel.
+
 ## 0.11.29 - rustls moves past RUSTSEC-2026-0285
 
 `rustls` 0.23.41 → 0.23.45 (and `rustls-webpki` 0.103.13 → 0.103.15, pulled along), via

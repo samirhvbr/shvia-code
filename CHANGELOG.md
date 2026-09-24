@@ -3,6 +3,20 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.24 - the model pin leaves .claude/settings.json
+
+`"model": "opus[1m]"` and the `ANTHROPIC_DEFAULT_OPUS_MODEL` env pin are gone.
+The window suffix was a version pin in disguise — the 1M variant existed only for the
+previous Opus, so every session was born on it while the catalog already offered the
+newer one. The env var is worse than a pin: it redefines what `opus` means for
+everything that reads it, the model picker included.
+
+It unblocks nothing on its own: the deciding layer is the account's server-managed
+settings, which outrank every local file. Rule, measurement and what to write instead
+(`"model": "opus55"`, the version named): repodocs ADR-026.
+
+No test: two JSON keys and a comment. Checked that the file still parses.
+
 ## 0.11.22 - the stop_request contract says which end of the last message survives
 
 `docs/embedding.md` said `last` was "cut at 4.000 characters" and left the reader to guess

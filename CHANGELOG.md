@@ -3,6 +3,19 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.29 - rustls moves past RUSTSEC-2026-0285
+
+`rustls` 0.23.41 → 0.23.45 (and `rustls-webpki` 0.103.13 → 0.103.15, pulled along), via
+`cargo update -p rustls`. RUSTSEC-2026-0285: rustls accepted TLS 1.3 handshake messages
+sent at the wrong encryption level. It reaches `anna` through `reqwest` → `hyper-rustls`,
+i.e. every call to the gateway.
+
+The advisory check has existed since 0.11.15 and never ran (see 0.11.27), so this is the
+first time it could say anything. Its first run on Linux flagged exactly this one advisory.
+
+Checked: `cargo deny check advisories` → `advisories ok`; with the previous lock it fails
+with RUSTSEC-2026-0285. `cargo test --locked` 104 passed, clippy clean.
+
 ## 0.11.28 - the bash time ceiling kills the whole process group again
 
 `matar_grupo` ran `kill -KILL -<pgid>`, and procps-ng's `kill` does not read a bare

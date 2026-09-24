@@ -1,21 +1,21 @@
-# Perfil de modelo Claude Code — ShvIA Desktop
+# Claude Code profile — ShvIA Desktop
 
-`.claude/` deste projeto segue o padrão dos repos Blue3/samirhvbr: perfil de
-modelo + postura de permissões. Stack-alvo: **Tauri 2 (Rust) + casca web
-(npm/Vite) + sidecar Python (entra na F2)** — o servidor é remoto, então
-**nenhum banco ou segredo roda aqui**.
+This project's `.claude/` follows the Blue3/samirhvbr repo standard: permissions
+posture and effort, and nothing else. Target stack: **Tauri 2 (Rust) + web shell
+(npm/Vite) + Python sidecar (arrives in F2)** — the server is remote, so **no
+database and no secret runs here**.
 
-## Arquivos
+## Files
 
-| Arquivo | Papel |
-|---------|-------|
-| `settings.json` | Perfil **ativo** (versionado). Hoje = **Opus-only**, `defaultMode: plan`, só a **deny-list** de segurança. |
+| File | Role |
+|------|------|
+| `settings.json` | The **active** profile (versioned). Today = `effortLevel: xhigh`, `defaultMode: plan`, and the security **deny-list** only. It chooses **no model**. |
 
-> A **allow-list** (atalhos que evitam prompts repetidos) **não** vem no
-> `settings.json` de propósito: conceder permissão ao agente é uma ação **sua**.
-> Aplique o bloco abaixo manualmente quando quiser reduzir os prompts.
+> The **allow-list** (shortcuts that avoid repeated prompts) is **deliberately**
+> absent from `settings.json`: granting the agent a permission is **your** act.
+> Apply the block below by hand when you want fewer prompts.
 
-## Allow-list recomendada (cole em `permissions.allow`)
+## Recommended allow-list (paste into `permissions.allow`)
 
 ```jsonc
 "allow": [
@@ -33,17 +33,24 @@ modelo + postura de permissões. Stack-alvo: **Tauri 2 (Rust) + casca web
 ]
 ```
 
-## Regras que valem lembrar
+## Rules worth remembering
 
-- **Effort `max` vai por env** (`CLAUDE_CODE_EFFORT_LEVEL=max`). O campo
-  `effortLevel` do JSON só aceita `low/medium/high/xhigh` — `max` ali é ignorado.
-- **1M é nativo** no Opus 5 (API Anthropic), sem flag. Não setar
-  `CLAUDE_CODE_DISABLE_1M_CONTEXT`. No plano Max é incluso — usar longe do limite.
-- **`defaultMode: plan`** — o agente planeja antes de agir. Mantém o hábito de
-  revisar mudanças estruturais antes de tocar em código.
+- **The model is the user's choice, and this repository makes none of it**
+  (repodocs ADR-027). You pick it with `/model`, per session, and a subagent
+  inherits the session's model. `settings.json` carries no `model`, no
+  `fallbackModel`, no `availableModels` and no model env var
+  (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`,
+  `CLAUDE_CODE_SUBAGENT_MODEL`). There are no stand-by profiles to copy over
+  `settings.json` — `/model` is how the model changes. The context window is
+  whatever the model you picked offers; the repository guarantees none.
+- **Effort `max` goes through the env** (`CLAUDE_CODE_EFFORT_LEVEL=max`). The
+  JSON `effortLevel` field only accepts `low/medium/high/xhigh` — `max` there is
+  ignored.
+- **`defaultMode: plan`** — the agent plans before acting. It keeps the habit of
+  reviewing structural changes before touching code.
 
-## Deny-list (já no `settings.json`)
+## Deny-list (already in `settings.json`)
 
-Bloqueia leitura de `.env`/chaves (`*.pem`/`*.key`/`*.p8`/`*.p12`/`*.pfx`),
-`rm -rf`, `git push --force/-f`, `git reset --hard`, `git clean -fd` e
-`curl|sh`/`wget|sh`. **Não afrouxar** sem motivo documentado.
+Blocks reading `.env`/keys (`*.pem`/`*.key`/`*.p8`/`*.p12`/`*.pfx`), `rm -rf`,
+`git push --force/-f`, `git reset --hard`, `git clean -fd` and
+`curl|sh`/`wget|sh`. **Do not loosen** without a documented reason.

@@ -3,6 +3,50 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.26 - the three version carriers agree again
+
+`version.md` went 0.11.22 → 0.11.25 across three commits (0.11.23, 0.11.24, 0.11.25) and
+`Cargo.toml` and `Cargo.lock` stayed at 0.11.22. `build.rs` refuses to compile when the
+three disagree, so from 0.11.23 on this branch did not build at all — `cargo test` stopped
+at the build script, before a single test ran.
+
+The commit that started it was 0.11.23: it was tested, then bumped, and the bump was the
+one change nobody compiled. The next two bumps copied the same shape. This commit only
+moves `Cargo.toml` and `Cargo.lock` to the version `version.md` now declares; no code
+changes.
+
+Checked: `cargo test --locked` and `cargo clippy --all-targets --locked -- -D warnings`
+on this commit.
+
+## 0.11.25 - the repository stops choosing the model
+
+`CLAUDE_CODE_SUBAGENT_MODEL` leaves `.claude/settings.json`. The model is now the user's
+choice, made with `/model`, and a subagent inherits it: by default Claude Code gives a
+subagent the session's model, and this variable was the only thing making it different —
+with the session on Opus 5.5, subagents were measured on Opus 5, because the variable names
+the `opus` alias and the alias still resolves through the organization's managed pin.
+
+`.claude/README.md` stop(s) describing a model profile.
+
+Rule and measurement: repodocs ADR-027.
+
+No test: configuration and documents. Checked that the file parses and that repodocs
+runbook §7's check is silent here.
+
+## 0.11.24 - the model pin leaves .claude/settings.json
+
+`"model": "opus[1m]"` and the `ANTHROPIC_DEFAULT_OPUS_MODEL` env pin are gone.
+The window suffix was a version pin in disguise — the 1M variant existed only for the
+previous Opus, so every session was born on it while the catalog already offered the
+newer one. The env var is worse than a pin: it redefines what `opus` means for
+everything that reads it, the model picker included.
+
+It unblocks nothing on its own: the deciding layer is the account's server-managed
+settings, which outrank every local file. Rule, measurement and what to write instead
+(`"model": "opus55"`, the version named): repodocs ADR-026.
+
+No test: two JSON keys and a comment. Checked that the file still parses.
+
 ## 0.11.22 - the stop_request contract says which end of the last message survives
 
 `docs/embedding.md` said `last` was "cut at 4.000 characters" and left the reader to guess

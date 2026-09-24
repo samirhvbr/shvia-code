@@ -3,6 +3,23 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.30 - a checkpoint restore gives back the exact bytes, line endings included
+
+`/rollback` rewrote line endings. The checkpoint's git calls inherited the user's
+`core.autocrlf`, and with `true` (the Windows default) `git restore` converted LF to CRLF on
+the way back: a file that was `"estado na foto\n"` in the photo came back as
+`"estado na foto\r\n"`. That is what the Windows CI measured once 0.11.27 stopped hiding
+test failures (`snapshot_e_restore_devolvem_o_estado_da_foto`).
+
+Every checkpoint git call now runs with `-c core.autocrlf=false`, so the photo and the
+rollback are byte-exact. Repository `.gitattributes` still apply and round-trip on their own.
+
+New test `o_restore_devolve_os_bytes_exatos_mesmo_com_autocrlf` sets `core.autocrlf=true` in
+its sandbox. autocrlf converts on checkout on every OS, so it reproduces the defect on Linux
+too: without the fix it fails with the restored bytes ending in `13, 10`. The two snapshot
+tests now share a lock, because the 30 s debounce is process-wide and would make the second
+one flaky in parallel.
+
 ## 0.11.29 - rustls moves past RUSTSEC-2026-0285
 
 `rustls` 0.23.41 → 0.23.45 (and `rustls-webpki` 0.103.13 → 0.103.15, pulled along), via

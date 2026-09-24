@@ -3,6 +3,22 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.32 - the bash time ceiling kills the process tree on Windows too
+
+On Windows `matar_grupo` only called `filho.kill()`, which ends the `sh` and leaves the
+grandchild (`sleep`, `node`, a test binary) holding the output pipe. Reading the output
+then waited for the grandchild, which is the hang the F-04 ceiling exists to stop. The
+Windows CI measured it once 0.11.27 stopped hiding test failures:
+`comando_que_trava_e_morto_no_teto` and `o_neto_morre_junto_com_o_pai` both failed there.
+(0.11.28 fixed the same two tests on Linux, where the cause was different: `kill` needed `--`.)
+
+It now runs `taskkill /T /F /PID <pid>`, which walks the tree by parent PID, and keeps
+`filho.kill()` as the fallback.
+
+Checked: `cargo clippy --target x86_64-pc-windows-gnu --all-targets -D warnings` compiles
+the Windows branch cleanly. Whether it kills the tree is measured only on the Windows
+runner; this delivery lands after `build-windows` is green on its branch.
+
 ## 0.11.31 - the doc-tree ruler reads a CRLF checkout
 
 `arvore_da_doc_bate_com_src` looked for `"\nsrc/\n"` in `docs/arquitetura-cli.md`, and a

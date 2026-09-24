@@ -463,7 +463,19 @@ fn matar_grupo(filho: &mut Child) {
 
 #[cfg(not(unix))]
 fn matar_grupo(filho: &mut Child) {
-    // Sem grupo de processos portátil aqui; mata o filho direto.
+    // Windows has no process group to signal, and `filho.kill()` alone ends only the
+    // `sh`: the grandchild (`sleep`, `node`, the test binary) kept the output pipe open
+    // and the read hung until it exited, which is the hang the ceiling exists to stop.
+    // The Windows CI measured it once 0.11.27 stopped hiding test failures.
+    // `taskkill /T` walks the tree by parent PID; `/F` because a hung process will not
+    // answer a polite close.
+    let _ = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &filho.id().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    // Belt and braces, as on unix: if taskkill is missing or the tree is already gone,
+    // the child still dies.
     let _ = filho.kill();
 }
 

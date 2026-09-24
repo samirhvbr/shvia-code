@@ -3,6 +3,21 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.26 - the three version carriers agree again
+
+`version.md` went 0.11.22 → 0.11.25 across three commits (0.11.23, 0.11.24, 0.11.25) and
+`Cargo.toml` and `Cargo.lock` stayed at 0.11.22. `build.rs` refuses to compile when the
+three disagree, so from 0.11.23 on this branch did not build at all — `cargo test` stopped
+at the build script, before a single test ran.
+
+The commit that started it was 0.11.23: it was tested, then bumped, and the bump was the
+one change nobody compiled. The next two bumps copied the same shape. This commit only
+moves `Cargo.toml` and `Cargo.lock` to the version `version.md` now declares; no code
+changes.
+
+Checked: `cargo test --locked` and `cargo clippy --all-targets --locked -- -D warnings`
+on this commit.
+
 ## 0.11.25 - the repository stops choosing the model
 
 `CLAUDE_CODE_SUBAGENT_MODEL` leaves `.claude/settings.json`. The model is now the user's

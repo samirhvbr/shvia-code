@@ -440,12 +440,18 @@ fn esperar_ou_matar(filho: &mut Child, teto: Duration) -> bool {
 
 #[cfg(unix)]
 fn matar_grupo(filho: &mut Child) {
-    // `kill -KILL -<pgid>` alcança a árvore. Usa o binário `kill` em vez da `libc` para
-    // não acrescentar dependência por causa de uma chamada — a casa já usa `Command` para
-    // `git` e `sh`, e este caminho só roda quando algo já deu errado.
+    // `kill -KILL -- -<pgid>` reaches the whole tree. It uses the `kill` binary instead of
+    // `libc` so one call does not add a dependency; the house already runs `git` and `sh`
+    // through `Command`, and this path only runs when something already went wrong.
+    //
+    // 🔴 The `--` is load-bearing. Without it, procps-ng's `kill` does not read `-<pgid>` as
+    // a PID: `kill -KILL -999999` exits 0 without a word, while `kill -KILL -- -999999`
+    // says "No such process". On GitHub's ubuntu-latest runner the group survived and
+    // `comando_que_trava_e_morto_no_teto` took the full 30 s (0.11.28).
     let pgid = filho.id();
     let _ = Command::new("kill")
         .arg("-KILL")
+        .arg("--")
         .arg(format!("-{pgid}"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())

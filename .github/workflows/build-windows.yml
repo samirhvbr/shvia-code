@@ -49,22 +49,23 @@ jobs:
       - name: Cache do cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # Antes do build, o barato: `--locked` recusa mexer no lock (é ele que guarda o
-      # lockfile de verdade, como a `build.rs` explica), `clippy` e os 63 testes. Um build
-      # de release leva minutos; um teste quebrado que só aparece depois dele custa a
-      # rodada inteira.
-      - name: Testes e clippy
-        run: |
-          cargo test --locked
-          cargo clippy --all-targets --locked -- -D warnings
+      # Before the build, the cheap part: `--locked` refuses to touch the lock (it is what
+      # actually guards the lockfile, as build.rs explains), then the tests, then clippy. A
+      # release build takes minutes; a broken test that shows up only after it costs the
+      # whole run.
+      #
+      # 🔴 ONE COMMAND PER STEP, and it is not style. This step runs under PowerShell, and a
+      # PowerShell step takes the exit code of its LAST command only. When test and clippy
+      # shared one script, the 12/09 run logged "test result: FAILED. 95 passed; 5 failed"
+      # and the step still went green because clippy passed after it (0.11.27).
+      - name: cargo test
+        run: cargo test --locked
 
-      # RustSec advisories (achados DEP-3 / F-31). O `deny.toml` deste repositório passa com
-      # a lista de exceções VAZIA, e esse é o estado desejado — os dois repos Tauri precisam
-      # de dezesseis exceções documentadas por causa da árvore GTK3 deles, e este não precisa
-      # de nenhuma. Se um dia precisar, a exceção vem com o motivo escrito.
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check advisories
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # The RustSec advisory check lives in test.yml: it is a container action, and
+      # container actions run on Linux only. Here it failed every run since 0.11.15.
 
       - name: Build release
         run: cargo build --release --locked --target x86_64-pc-windows-msvc

@@ -3,6 +3,17 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.31 - the doc-tree ruler reads a CRLF checkout
+
+`arvore_da_doc_bate_com_src` looked for `"\nsrc/\n"` in `docs/arquitetura-cli.md`, and a
+Windows checkout with `core.autocrlf=true` has CRLF there, so the ruler panicked with *"a §2
+tem o bloco da árvore começando em `src/`"* before measuring anything. It now normalizes
+`\r\n` to `\n` after reading the doc. The repository has no `.gitattributes`, and the fix
+stays in the ruler rather than forcing LF on every Windows clone.
+
+Measured by converting the doc to CRLF locally: with the normalization the ruler passes;
+without it, it fails as on the Windows runner.
+
 ## 0.11.30 - a checkpoint restore gives back the exact bytes, line endings included
 
 `/rollback` rewrote line endings. The checkpoint's git calls inherited the user's

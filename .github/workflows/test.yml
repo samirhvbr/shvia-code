@@ -1,0 +1,56 @@
+# Tests, clippy and the RustSec advisory check on Linux, on every pull request and on
+# every push to master.
+#
+# Why this file exists: until 0.11.27 the only workflow that ran `cargo test` was
+# build-windows.yml, and it ran on push to master only. A pull request got zero checks,
+# so a branch that did not even build (0.11.23-0.11.25: the version carriers disagreed
+# and build.rs refused to compile) looked exactly like a green one.
+#
+# Why Linux and not the Windows job: the advisory check is a container action, and
+# GitHub runs container actions on Linux only. On windows-latest it failed every run
+# since 0.11.15 with "Container action is only supported on Linux", which kept master
+# red for a reason unrelated to the code.
+#
+# `uses:` are pinned by commit SHA, with the version in a comment, like build-windows.yml
+# (finding F-09); the ruler toda_action_do_ci_esta_pinada_por_sha in src/main.rs checks
+# every workflow in this directory.
+
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # branch stable on 2026-08-05
+        with:
+          components: clippy
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Separate steps on purpose: one step per command, so each one's exit code decides
+      # its own result. `--locked` refuses to touch Cargo.lock.
+      - name: cargo test
+        run: cargo test --locked
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # RustSec advisories (findings DEP-3 / F-31). deny.toml passes with an EMPTY
+      # exception list, and that is the intended state; an exception, if one is ever
+      # needed, comes with its reason written next to it.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories

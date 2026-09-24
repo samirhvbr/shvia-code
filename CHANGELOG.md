@@ -3,6 +3,32 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.27 - a Linux job runs the tests on every pull request
+
+New workflow `.github/workflows/test.yml`, on `ubuntu-latest`, on every `pull_request` and
+every push to `master`: `cargo test --locked`, `cargo clippy --all-targets --locked -- -D
+warnings`, and the RustSec advisory check (`cargo deny check advisories`).
+
+Until now the only workflow that ran the tests was `build-windows.yml`, on push to `master`
+only, so a pull request had **zero checks**. That is how 0.11.23-0.11.25 reached review
+without building at all (see 0.11.26).
+
+The advisory check **moves** here from the Windows job. It is a container action, and GitHub
+runs container actions on Linux only: on `windows-latest` it failed every run since 0.11.15
+with *"Container action is only supported on Linux"*. That was the red X on `master`, and
+it hid a second defect (next entry).
+
+A failing test now fails the Windows build. The Windows step ran `cargo test` and `cargo
+clippy` in one PowerShell script, and a PowerShell step takes the exit code of its **last**
+command only. The 12/09 run logged `test result: FAILED. 95 passed; 5 failed` and the step
+still went green, because clippy passed after it. One failure was the SHA-pin ruler
+(fixed in 0.11.23); the other four fail only on Windows and were never reported:
+`checkpoint::tests::snapshot_e_restore_devolvem_o_estado_da_foto`,
+`reguas_do_repo::arvore_da_doc_bate_com_src`,
+`tools::tests::comando_que_trava_e_morto_no_teto` and
+`tools::tests::o_neto_morre_junto_com_o_pai`. They are now visible, so the Windows build
+is red for them until they are fixed.
+
 ## 0.11.26 - the three version carriers agree again
 
 `version.md` went 0.11.22 → 0.11.25 across three commits (0.11.23, 0.11.24, 0.11.25) and

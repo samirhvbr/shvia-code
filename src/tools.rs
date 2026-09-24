@@ -1217,28 +1217,36 @@ mod tests {
         // o pipe — e a leitura da saída ficaria pendurada exatamente como antes.
         let dir = sandbox();
         let marca = dir.join("neto.pid");
-        let cmd = format!(
-            "sh -c 'echo $$ > {}; sleep 30' & wait",
-            marca.display()
-        );
+        // Forward slashes and double quotes: on Windows `display()` gives `C:\Users\...`,
+        // and the inner `sh` would read those backslashes as escapes and write the PID
+        // somewhere else. Git for Windows' `sh` accepts `C:/...`.
+        let caminho = marca.display().to_string().replace('\\', "/");
+        let cmd = format!("sh -c 'echo $$ > \"{caminho}\"; sleep 30' & wait");
+        // The ceiling has to outlast the grandchild's birth. Git for Windows' `sh` forks
+        // slowly enough that at 500 ms the Job Object (0.11.33) killed the tree before the
+        // grandchild had written its PID, and the test had nothing to measure.
+        let teto = Duration::from_millis(if cfg!(windows) { 3000 } else { 500 });
         let t0 = Instant::now();
-        let out = executar_bash(&dir, &cmd, Some(Duration::from_millis(500)));
+        let out = executar_bash(&dir, &cmd, Some(teto));
         assert!(out.contains("ERRO: timeout"), "saída: {out}");
-        assert!(t0.elapsed() < Duration::from_secs(5), "não voltou a tempo");
+        assert!(t0.elapsed() < teto + Duration::from_secs(5), "não voltou a tempo");
 
         // O neto tem de estar morto. `kill -0` responde se o processo existe.
         let pid = std::fs::read_to_string(&marca).unwrap_or_default().trim().to_string();
         assert!(!pid.is_empty(), "o neto nem chegou a nascer — o teste não mede nada");
         std::thread::sleep(Duration::from_millis(200));
-        let vivo = Command::new("kill")
-            .arg("-0")
-            .arg(&pid)
+        // `sh`'s builtin `kill`, not a `kill` binary: the PID is the one `sh` printed (on
+        // Windows an MSYS PID, which only that runtime resolves), and a binary missing from
+        // PATH made `unwrap_or(false)` read "could not run" as "dead", a pass that measured
+        // nothing. A shell that cannot run fails the test instead.
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(format!("kill -0 {pid}"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .map(|st| st.success())
-            .unwrap_or(false);
-        assert!(!vivo, "o neto {pid} sobreviveu — o kill não alcançou o grupo");
+            .expect("sh para conferir o neto");
+        assert!(!status.success(), "o neto {pid} sobreviveu — o kill não alcançou o grupo");
     }
 
     #[test]

@@ -3,6 +3,25 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.34 - the grandchild test measures on Windows instead of racing the fork
+
+With the Job Object (0.11.33) the Windows run returned in 1.78 s instead of 30 s, the kill
+worked, and `o_neto_morre_junto_com_o_pai` then failed on its own premise: *"o neto nem
+chegou a nascer"*. Three test defects, none in the product:
+
+- **The PID path.** `display()` gives `C:\Users\...`, and inside the inner `sh -c` those
+  backslashes are escapes, so the PID was written somewhere else. It now passes the path
+  with forward slashes, in double quotes.
+- **The ceiling raced the fork.** Git for Windows' `sh` forks slowly; at 500 ms the job
+  killed the tree before the grandchild existed. The ceiling is 3 s on Windows and stays
+  500 ms elsewhere.
+- **The liveness check could pass without measuring.** It ran a `kill` binary and read
+  "could not run" as "dead" (`unwrap_or(false)`). It now uses `sh`'s builtin `kill -0`,
+  which resolves the PID `sh` printed, and a shell that cannot run fails the test.
+
+Reversal on Linux: with the tree kill replaced by `filho.kill()` the test fails
+(*"não voltou a tempo"*, 30 s).
+
 ## 0.11.33 - on Windows the ceiling kills the tree through a Job Object
 
 0.11.32's `taskkill /T /F` was not enough. On its branch the Windows runner passed

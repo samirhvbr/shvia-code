@@ -3,6 +3,28 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.33 - on Windows the ceiling kills the tree through a Job Object
+
+0.11.32's `taskkill /T /F` was not enough. On its branch the Windows runner passed
+`comando_que_trava_e_morto_no_teto` and still failed `o_neto_morre_junto_com_o_pai` with
+*"não voltou a tempo"*. `taskkill /T` walks parent PIDs, and under Git for Windows' `sh` a
+grandchild whose parent already exited has no parent link left to walk.
+
+Each timed `bash` call now holds its process tree (`Arvore`): on Windows a Job Object the
+`sh` is assigned to right after `spawn()`. Job membership is inherited at process creation,
+so it survives what breaks the parent links. The ceiling calls `TerminateJobObject`.
+`taskkill` stays as the fallback when the job cannot be created or assigned. There is no
+KILL_ON_JOB_CLOSE, so a command that ends normally keeps what it started in the background,
+as before. On unix `Arvore` is the existing process group and `matar_grupo`, unchanged.
+
+New Windows-only dependency: `windows-sys` 0.59 (features `Win32_Foundation`,
+`Win32_Security`, `Win32_System_JobObjects`), already in the tree through tokio/mio; the
+lockfile gains one line.
+
+Checked: clippy `-D warnings` for `x86_64-pc-windows-gnu` compiles the Windows branch;
+Linux tests 105 passed; `cargo deny check advisories` ok. Whether the job reaches the
+grandchild is measured only by `build-windows` on this branch.
+
 ## 0.11.32 - the bash time ceiling kills the process tree on Windows too
 
 On Windows `matar_grupo` only called `filho.kill()`, which ends the `sh` and leaves the

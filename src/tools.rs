@@ -387,7 +387,10 @@ fn executar_bash(root: &Path, command: &str, teto: Option<Duration>) -> String {
             let _ = filho.wait();
             false
         }
-        Some(t) => esperar_ou_matar(&mut filho, t),
+        Some(t) => {
+            let arvore = Arvore::prender(&filho);
+            esperar_ou_matar(&mut filho, t, &arvore)
+        }
     };
 
     let code = filho.wait().ok().and_then(|st| st.code()).unwrap_or(-1);
@@ -420,7 +423,7 @@ fn ler_em_thread<R: std::io::Read + Send + 'static>(mut r: R) -> std::thread::Jo
 }
 
 /// Espera o filho até o teto. Devolve `true` se estourou (e matou).
-fn esperar_ou_matar(filho: &mut Child, teto: Duration) -> bool {
+fn esperar_ou_matar(filho: &mut Child, teto: Duration, arvore: &Arvore) -> bool {
     let limite = Instant::now() + teto;
     loop {
         match filho.try_wait() {
@@ -429,12 +432,88 @@ fn esperar_ou_matar(filho: &mut Child, teto: Duration) -> bool {
             Err(_) => return false,
         }
         if Instant::now() >= limite {
-            matar_grupo(filho);
+            arvore.matar(filho);
             return true;
         }
         // 50 ms: o suficiente para não virar espera ocupada e curto o bastante para o
         // teto valer o que diz. Um comando que termina não espera mais que isso.
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The process tree of one `bash` call, so the ceiling can kill all of it, not just the `sh`.
+///
+/// On unix the tree is the process group that `process_group(0)` created at spawn, and
+/// killing it is `matar_grupo`. Nothing to hold.
+#[cfg(not(windows))]
+struct Arvore;
+
+#[cfg(not(windows))]
+impl Arvore {
+    fn prender(_filho: &Child) -> Self {
+        Arvore
+    }
+
+    fn matar(&self, filho: &mut Child) {
+        matar_grupo(filho);
+    }
+}
+
+/// On Windows the tree is a Job Object. Windows has no process group, and walking parent
+/// PIDs (`taskkill /T`, 0.11.32) does not reach everything: the Windows CI measured
+/// `o_neto_morre_junto_com_o_pai` still hanging with it. Under Git for Windows' `sh`, a
+/// grandchild whose parent already exited has no parent link left to walk, while job
+/// membership is inherited at process creation and survives that.
+///
+/// No KILL_ON_JOB_CLOSE: a command that ends normally keeps whatever it started in the
+/// background, as before. Only the ceiling terminates the job. A child that spawns before
+/// `AssignProcessToJobObject` runs escapes the job; the window is the time between
+/// `spawn()` returning and the next line, and `taskkill` stays as the fallback.
+#[cfg(windows)]
+struct Arvore(Option<windows_sys::Win32::Foundation::HANDLE>);
+
+#[cfg(windows)]
+impl Arvore {
+    fn prender(filho: &Child) -> Self {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        // SAFETY: plain Win32 calls with null attributes and name; the process handle
+        // belongs to `filho`, which outlives this call; on failure the job handle is closed.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Arvore(None);
+            }
+            if AssignProcessToJobObject(job, filho.as_raw_handle() as _) == 0 {
+                CloseHandle(job);
+                return Arvore(None);
+            }
+            Arvore(Some(job))
+        }
+    }
+
+    fn matar(&self, filho: &mut Child) {
+        match self.0 {
+            // SAFETY: `job` is a live handle owned by this struct until Drop.
+            Some(job) => unsafe {
+                windows_sys::Win32::System::JobObjects::TerminateJobObject(job, 1);
+            },
+            None => matar_grupo(filho),
+        }
+        let _ = filho.kill();
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Arvore {
+    fn drop(&mut self) {
+        if let Some(job) = self.0 {
+            // SAFETY: closes the handle this struct owns, exactly once.
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(job);
+            }
+        }
     }
 }
 

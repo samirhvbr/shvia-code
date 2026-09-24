@@ -3,6 +3,22 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.11.28 - the bash time ceiling kills the whole process group again
+
+`matar_grupo` ran `kill -KILL -<pgid>`, and procps-ng's `kill` does not read a bare
+`-<pgid>` after the signal as a PID. Measured: `kill -KILL -999999` exits 0 without a
+word, while `kill -KILL -- -999999` says "No such process". Now it runs
+`kill -KILL -- -<pgid>`.
+
+The first run of the new Linux job (0.11.27) is what caught it:
+`comando_que_trava_e_morto_no_teto` took the full 30 s ("demorou 30.003s — o teto não
+cortou") and `o_neto_morre_junto_com_o_pai` did not return in time. The belt-and-braces
+`filho.kill()` killed the `sh`, but the grandchild kept the output pipe open, and reading
+the output waited for it. That is the exact hang the F-04 ceiling exists to prevent.
+
+On this machine both tests passed with and without the `--`, so a local run cannot tell the
+two apart; the GitHub runner is the measurement.
+
 ## 0.11.27 - a Linux job runs the tests on every pull request
 
 New workflow `.github/workflows/test.yml`, on `ubuntu-latest`, on every `pull_request` and
@@ -22,12 +38,13 @@ A failing test now fails the Windows build. The Windows step ran `cargo test` an
 clippy` in one PowerShell script, and a PowerShell step takes the exit code of its **last**
 command only. The 12/09 run logged `test result: FAILED. 95 passed; 5 failed` and the step
 still went green, because clippy passed after it. One failure was the SHA-pin ruler
-(fixed in 0.11.23); the other four fail only on Windows and were never reported:
+(fixed in 0.11.23); the other four were never reported:
 `checkpoint::tests::snapshot_e_restore_devolvem_o_estado_da_foto`,
 `reguas_do_repo::arvore_da_doc_bate_com_src`,
 `tools::tests::comando_que_trava_e_morto_no_teto` and
 `tools::tests::o_neto_morre_junto_com_o_pai`. They are now visible, so the Windows build
-is red for them until they are fixed.
+is red for them until they are fixed. (This entry first called all four Windows-only; the
+new Linux job's first run failed the last two as well, see 0.11.28.)
 
 ## 0.11.26 - the three version carriers agree again
 

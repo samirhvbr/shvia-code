@@ -3,6 +3,23 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.12.0 - the installer audits the dependencies, and a finding stops the install
+
+Finding f165, the owner's answer on 24/09/2026: "lock". `install.sh` called `build-local.sh`
+without `--audit`, so the dependency audit never ran on an install.
+
+- `install.sh` now runs `build-local.sh --audit-strict`. A vulnerability makes `cargo audit` exit
+  non-zero, and `set -e` stops the install before the build.
+- `--audit-strict` also stops, with exit 3 and the install command, when `cargo-audit` is missing.
+  The plain `--audit` still prints "skipping" in that case: an audit that did not run must not
+  read as one that passed, and that is the difference between the two flags.
+- No bypass on purpose: the owner chose to block.
+
+Checked by hand, because this repository has no harness for its shell scripts. Without
+`cargo-audit` on the `PATH`: exit 3 and no build step. With a `cargo` that answers `audit` with
+a vulnerability: exit 1 and no build step. The real audit on today's lockfile passes (one
+allowed "yanked" warning), so installs keep working.
+
 ## 0.11.34 - the grandchild test measures on Windows instead of racing the fork
 
 With the Job Object (0.11.33) the Windows run returned in 1.78 s instead of 30 s, the kill

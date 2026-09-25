@@ -80,6 +80,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --debug) PROFILE_FLAG=""; OUTDIR="debug" ;;
     --audit) RUN_AUDIT=1 ;;
+    # The installer's mode (the owner's answer on 24/09/2026, finding f165: "lock"). A missing
+    # tool is a stop, not a skip: an audit that did not run must not read as an audit that
+    # passed.
+    --audit-strict) RUN_AUDIT=2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "opção desconhecida: $1 (use --help)" >&2; exit 2 ;;
   esac; shift
@@ -90,10 +94,18 @@ echo "==> anna (SHVIA-CODE) — build local ($_BUILD_OS)"
 step "[pré-requisitos] verifica o toolchain (Rust, Xcode) e a versão"
 preflight
 
-if [ "$RUN_AUDIT" -eq 1 ]; then
+if [ "$RUN_AUDIT" -ge 1 ]; then
   step "[audit] cargo audit (supply chain — SECURITY §4)"
-  if command -v cargo-audit >/dev/null 2>&1; then cargo audit
-  else echo "    (cargo-audit não instalado: 'cargo install cargo-audit' — pulando)"; fi
+  if command -v cargo-audit >/dev/null 2>&1; then
+    # set -e: a vulnerability makes `cargo audit` exit non-zero, and the build stops here.
+    cargo audit
+  elif [ "$RUN_AUDIT" -eq 2 ]; then
+    echo "    ✗ cargo-audit não está instalado, e a instalação só segue com a auditoria feita." >&2
+    echo "      Instale com:  cargo install cargo-audit   e rode de novo." >&2
+    exit 3
+  else
+    echo "    (cargo-audit não instalado: 'cargo install cargo-audit' — pulando)"
+  fi
 fi
 
 step "[1/1] cargo build $PROFILE_FLAG"

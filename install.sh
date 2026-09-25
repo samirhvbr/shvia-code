@@ -5,7 +5,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-./build-local.sh
+# The dependency audit runs, and a finding STOPS the install (the owner's answer on 24/09/2026,
+# finding f165: "lock"). Until then the installer did not run it at all. A missing cargo-audit
+# stops too: an audit that did not run must not pass for one that did.
+./build-local.sh --audit-strict
 
 DEST="${ANNA_BIN_DIR:-$HOME/.local/bin}"
 mkdir -p "$DEST"

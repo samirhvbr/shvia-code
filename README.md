@@ -30,7 +30,7 @@ git clone git@github.com:samirhvbr/SHVIA-CODE.git && cd SHVIA-CODE
 export SHVIA_API_KEY=<sua-chave-do-ShvIA>
 ```
 
-Precisa de Rust (`rustup`) — o `install.sh` avisa se faltar algo. A chave vem de
+Precisa de Rust (`rustup`) e do `cargo-audit` (`cargo install cargo-audit`) — o `install.sh` avisa se faltar algo. **The install stops on a dependency vulnerability** (since 0.11.35; the owner's choice, finding f165), and also when `cargo-audit` is missing, because an audit that did not run must not pass for one that did. A chave vem de
 `SHVIA_API_KEY` ou `~/.config/shvia-code/config.toml` — **nunca** por argumento de
 CLI. Para gravá-la no arquivo com `0600`, use `anna config set-key` (sem argumento
 ele lê do stdin, e assim a chave não fica no histórico do shell). Se o arquivo tiver

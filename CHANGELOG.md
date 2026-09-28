@@ -3,6 +3,16 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.12.1 - CI runs on the self-hosted runner cicd while the repository variable CI_RUNNER names it
+
+The account's GitHub Actions budget ran out on 25/09/2026, and since then this private repository's jobs
+fail in seconds with zero steps. Every Linux job now reads
+`runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}`. With the repository variable `CI_RUNNER=shvia-ci`
+it runs on `cicd`, the self-hosted runner set up on 28/09/2026 (its runbook is SHVIA-WEB
+`deploy/servidor-cicd.md`). Deleting the variable moves it back to GitHub-hosted runners.
+
+The Windows build (`build-windows.yml`) stays on `windows-latest`: this runner is Linux.
+
 ## 0.12.0 - the installer audits the dependencies, and a finding stops the install
 
 Finding f165, the owner's answer on 24/09/2026: "lock". `install.sh` called `build-local.sh`

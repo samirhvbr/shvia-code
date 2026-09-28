@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}   # self-hosted cicd when CI_RUNNER is set (SHVIA-WEB deploy/servidor-cicd.md)
     permissions:
       contents: write          # only this job writes; creating a tag needs it
     steps:

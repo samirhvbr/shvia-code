@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}   # self-hosted cicd when CI_RUNNER is set (SHVIA-WEB deploy/servidor-cicd.md)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 

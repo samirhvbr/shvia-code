@@ -4,7 +4,7 @@ name = "anna"
 # deste repo — o comentário antigo dizia "o build-local.sh checa" e isso era falso
 # (medido em 20/08: aquele script só olha o version.md do próprio desktop), que é
 # como o bump da 0.11.2 saiu pela metade sem nada acusar.
-version = "0.12.3"
+version = "0.12.4"
 edition = "2021"
 description = "Anna — CLI agêntico de código da Blue3, sobre o gateway do ShvIA (SHVIA-CODE)"
 authors = ["Samir Hanna Verza <samirhv@me.com>"]
@@ -32,6 +32,8 @@ directories = "5"       # ~/.config, ~/.local/share corretos por SO
 toml = "0.8"            # config file
 similar = "2"           # diff unificado (preview de edit_file/write_file — C2)
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }  # datas/hora LOCAL do dashboard (anna stats)
+crossterm = "0.29"          # terminal: largura da janela (e, em 0.12.5, modo raw + teclas do menu de aprovação)
+unicode-width = "0.1"       # largura VISÍVEL de uma string (caixas, tabelas, fundo do diff); mesma versão do rustyline
 
 # Windows-only: the Job Object that lets the bash time ceiling kill a whole process tree
 # (src/tools.rs, `Arvore`). Already in the dependency tree through tokio/mio; 0.59 is the

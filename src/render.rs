@@ -22,7 +22,7 @@ pub fn style_line(line: &str, in_code: bool) -> String {
         return term::bold(&inline(rest));
     }
     if let Some(rest) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
-        return format!("  • {}", inline(rest));
+        return format!("• {}", inline(rest));
     }
     inline(line)
 }

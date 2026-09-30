@@ -3,6 +3,28 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.12.4 - the turn reads like Claude Code: ● for an action, ⎿ for its result, a spinner while the model thinks
+
+Second delivery of the visual work (ADR-004). What `anna` prints while a turn runs.
+
+- **Actions and results.** A tool call is `● Read(src/boleto.rs)` and its result a line under it,
+  `⎿  142 linhas` — a summary, never the file (the model still receives everything). Each tool has
+  its own summary: lines read, results found, files matched, the first lines of a command's output
+  with `… +N linhas`, the exit code in red when it is not zero, a timeout as one sentence. Errors
+  and refusals are red. The raw JSON arguments (`⚙ read_file({"path":...})`) are gone.
+- **A spinner while the model thinks or a command runs** (`✻ Pensando… (12s)`, `✻ Executando… (3s)`),
+  on a terminal only. It owns its line: everything that prints stops it first, and dropping it (an
+  error leaving the turn) clears the line.
+- **The assistant's text opens with `●`** instead of the `ANNA` label, with a blank line between
+  blocks on a terminal.
+- **The footer** reads `✻ 14s · 3,6k tokens · US$ 0,0116` (`≈` when the provider did not report the
+  cost), with the turn's duration. The orchestrator's per-role lines keep the old footer.
+- **A welcome box** replaces the one-line banner: version, model and infra, the folder (`~` for the
+  home) and the branch.
+- `src/view.rs` holds all of the above as pure functions, so the look is tested without a terminal.
+  `crossterm` (the window width) and `unicode-width` (the visible width of a line) enter here; the
+  audit stays clean. `Frontend` gains `waiting()`, a no-op for the NDJSON host.
+
 ## 0.12.3 - the terminal decides once whether it can take colour, and a pipe gets none
 
 First delivery of the visual work (ADR-004): the base the next three stand on. No look changes

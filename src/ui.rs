@@ -1,25 +1,37 @@
 //! `Ui` — o `Frontend` do terminal: streaming com markdown por linha (`render`),
-//! linhas de ferramenta, rodapé de custo, E o gate (mostra o preview em ANSI +
-//! pergunta no stdin). Quem mostra é quem pergunta. O `JsonSink` é o par headless.
+//! títulos e resumos de ferramenta (`view`), spinner (`term`), rodapé de custo, E o gate
+//! (mostra o preview em ANSI + pergunta no stdin). Quem mostra é quem pergunta. O `JsonSink`
+//! é o par headless.
+//!
+//! O spinner é dono da linha enquanto roda: todo método que imprime o para antes.
 
 use crate::diff;
 use crate::frontend::Frontend;
 use crate::gate::{self, Policy, Preview};
 use crate::render;
 use crate::telemetry::Telemetry;
-use crate::term;
+use crate::term::{self, Spinner};
 use crate::types::{Event, ToolCall};
+use crate::view::{self, Tone};
 use std::collections::HashSet;
+use std::time::Instant;
 
 #[derive(Default)]
 pub struct Ui {
-    label_shown: bool,
+    /// O `●` do assistente já saiu para o bloco de texto em andamento.
+    bullet_shown: bool,
     line_buf: String,
     in_code: bool,
     /// Escopos liberados por "tudo nesta sessão".
     allowed: HashSet<String>,
     /// `anna -p`: nega escrita/bash por padrão (sem quem confirmar).
     non_interactive: bool,
+    spinner: Option<Spinner>,
+    /// Quando o turno começou (a primeira espera); o rodapé mostra quanto durou.
+    turn_started: Option<Instant>,
+    /// Uma linha em branco antes do próximo texto do assistente (depois do prompt e depois
+    /// do resultado de uma ferramenta).
+    gap_before_text: bool,
 }
 
 impl Ui {
@@ -37,12 +49,33 @@ impl Ui {
         u
     }
 
-    pub fn banner(&self, text: &str) {
-        println!("{}", term::accent(text));
+    /// A caixa de abertura do REPL.
+    pub fn welcome(&self, version: &str, model: &str, server: &str, cwd: &str, branch: Option<&str>) {
+        for line in view::welcome(version, model, server, cwd, branch, term::width()) {
+            println!("{line}");
+        }
     }
 
     pub fn note(&self, text: &str) {
         println!("{}", term::gray(text));
+    }
+
+    fn stop_spinner(&mut self) {
+        if let Some(mut sp) = self.spinner.take() {
+            sp.stop();
+        }
+    }
+
+    fn start_spinner(&mut self, label: &str) {
+        self.stop_spinner();
+        self.spinner = Spinner::start(label);
+    }
+
+    /// Linha em branco entre blocos — só num terminal; num pipe a saída fica compacta.
+    fn gap(&self) {
+        if term::caps().tty_out {
+            println!();
+        }
     }
 
     fn flush_pending(&mut self) {
@@ -53,16 +86,29 @@ impl Ui {
     }
 
     fn print_line(&mut self, line: &str) {
-        if !self.label_shown {
-            println!("{}", term::green("ANNA"));
-            self.label_shown = true;
-        }
-        if line.trim_start().starts_with("```") {
+        let lead = if self.bullet_shown {
+            "  ".to_string()
+        } else {
+            if line.trim().is_empty() {
+                return; // um bloco não abre com linha em branco
+            }
+            if std::mem::take(&mut self.gap_before_text) {
+                self.gap();
+            }
+            self.bullet_shown = true;
+            format!("{} ", term::accent("●"))
+        };
+        let styled = if line.trim_start().starts_with("```") {
             self.in_code = !self.in_code;
-            println!("{}", term::gray("  ┄┄┄"));
-            return;
+            term::gray("┄┄┄")
+        } else {
+            render::style_line(line, self.in_code)
+        };
+        if styled.trim().is_empty() {
+            println!();
+        } else {
+            println!("{lead}{styled}");
         }
-        println!("{}", render::style_line(line, self.in_code));
     }
 
     fn render_preview(&self, preview: &Preview) {
@@ -79,12 +125,49 @@ impl Ui {
             }
         }
     }
+
+    /// A decisão do gate (o que `approve` fazia antes do spinner entrar).
+    fn decide(&mut self, policy: Policy, scope: &str, preview: &Preview) -> bool {
+        match policy {
+            Policy::Auto => true,
+            Policy::Confirm if self.allowed.contains(scope) => true,
+            _ => {
+                self.render_preview(preview);
+                if self.non_interactive {
+                    return false;
+                }
+                if policy == Policy::Always {
+                    matches!(gate::ask("  AÇÃO DESTRUTIVA — confirmar? [s]im / [n]ão > "), 'S' | 's')
+                } else {
+                    match gate::ask("  aplicar? [s]im / [n]ão / [t]udo nesta sessão > ") {
+                        'S' | 's' => true,
+                        'T' | 't' => {
+                            self.allowed.insert(scope.to_string());
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Frontend for Ui {
+    fn waiting(&mut self) {
+        if self.turn_started.is_none() {
+            self.turn_started = Some(Instant::now());
+            self.gap_before_text = true;
+        }
+        self.start_spinner("Pensando…");
+    }
+
     fn on_event(&mut self, ev: &Event) {
         match ev {
             Event::TextDelta(d) => {
+                if !d.is_empty() {
+                    self.stop_spinner();
+                }
                 for ch in d.chars() {
                     if ch == '\n' {
                         let line = std::mem::take(&mut self.line_buf);
@@ -95,8 +178,15 @@ impl Frontend for Ui {
                 }
             }
             Event::ToolCall(c) => {
+                self.stop_spinner();
                 self.flush_pending();
-                println!("{}", term::gray(&format!("  ⚙ {}({})", c.name, compact_args(c))));
+                if self.bullet_shown {
+                    self.gap();
+                }
+                let (verb, arg) = view::call_title(c);
+                let room = term::width().saturating_sub(verb.chars().count() + 6);
+                let arg = term::truncate_cols(&arg, room);
+                println!("{} {}({arg})", term::green("●"), term::bold(&verb));
             }
             Event::ReasoningDelta | Event::Model { .. } | Event::Usage(_) | Event::Error(_)
             | Event::Done { .. } | Event::Other => {}
@@ -104,31 +194,40 @@ impl Frontend for Ui {
     }
 
     fn end_stream(&mut self) {
+        self.stop_spinner();
         self.flush_pending();
-        self.label_shown = false;
+        self.bullet_shown = false;
         self.in_code = false;
     }
 
     fn tool_result(&mut self, call: &ToolCall, out: &str) {
-        let first = out.lines().next().unwrap_or("");
-        let head = format!("  ✓ {} → {} bytes", call.name, out.len());
-        let head = if out.starts_with("ERRO") || out.starts_with("RECUSADO") {
-            term::red(&head)
-        } else {
-            term::gray(&head)
-        };
-        println!("{head}  {}", term::gray(&truncate(first, 72)));
+        self.stop_spinner();
+        for (i, l) in view::result_lines(&call.name, out, term::width()).iter().enumerate() {
+            let lead = if i == 0 { "  ⎿  " } else { "     " };
+            let text = match l.tone {
+                Tone::Dim => term::gray(&l.text),
+                Tone::Error => term::red(&l.text),
+            };
+            println!("{}{text}", term::gray(lead));
+        }
+        self.gap_before_text = true;
     }
 
     fn turn_end(&mut self, tel: &Telemetry) {
-        println!("{}", term::gray(&tel.footer()));
+        self.stop_spinner();
+        let elapsed = self.turn_started.take().map(|t| t.elapsed().as_secs());
+        self.gap();
+        println!("{}", term::gray(&view::footer(elapsed, tel.tokens, tel.cost, tel.estimated)));
     }
 
     fn error(&mut self, msg: &str) {
+        self.stop_spinner();
+        self.turn_started = None;
         println!("{}", term::red(&format!("erro: {msg}")));
     }
 
     fn warn(&mut self, msg: &str) {
+        self.stop_spinner();
         println!("{}", term::yellow(msg));
     }
 
@@ -163,42 +262,13 @@ impl Frontend for Ui {
     }
 
     fn approve(&mut self, policy: Policy, scope: &str, _id: &str, preview: &Preview) -> bool {
-        match policy {
-            Policy::Auto => true,
-            Policy::Confirm if self.allowed.contains(scope) => true,
-            _ => {
-                self.render_preview(preview);
-                if self.non_interactive {
-                    return false;
-                }
-                if policy == Policy::Always {
-                    matches!(gate::ask("  AÇÃO DESTRUTIVA — confirmar? [s]im / [n]ão > "), 'S' | 's')
-                } else {
-                    match gate::ask("  aplicar? [s]im / [n]ão / [t]udo nesta sessão > ") {
-                        'S' | 's' => true,
-                        'T' | 't' => {
-                            self.allowed.insert(scope.to_string());
-                            true
-                        }
-                        _ => false,
-                    }
-                }
-            }
+        self.stop_spinner();
+        let go = self.decide(policy, scope, preview);
+        if go && scope == "bash" {
+            // O comando pode demorar: quem esperava o modelo agora espera o shell.
+            self.start_spinner("Executando…");
         }
-    }
-}
-
-fn compact_args(call: &ToolCall) -> String {
-    let s = serde_json::to_string(&call.arguments).unwrap_or_default();
-    truncate(&s, 80)
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{cut}…")
+        go
     }
 }
 

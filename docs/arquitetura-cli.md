@@ -54,10 +54,15 @@ src/
   stats_term.rs  Render das estatísticas no terminal.  (252 linhas)
   agent.rs       O LOOP agêntico (§4): monta payload, consome eventos, dispara tools,
                  reenvia. Teto de voltas. Agnóstico de UI.  (221 linhas)
-  ui.rs          A interface do terminal: stream, prompts de gate. O `repl.rs`/`tui.rs`
-                 do plano não existem; não há TUI (ratatui) neste código.  (218 linhas)
+  ui.rs          A interface do terminal: stream com o `●` do assistente, títulos e
+                 resumos de ferramenta, spinner, rodapé, prompts de gate. O `repl.rs`/
+                 `tui.rs` do plano não existem; não há TUI (ratatui) neste código (ADR-004).  (284 linhas)
+  view.rs        What a turn looks like, as pure functions: `● Read(path)` titles,
+                 `⎿` result summaries, the footer, the welcome box. Nothing prints, so
+                 all of it is tested without a terminal.  (435 linhas)
   term.rs        What the terminal supports, decided once (colour: TTY, `NO_COLOR`,
-                 `FORCE_COLOR`), and the only module that writes ANSI (ADR-004).  (157 linhas)
+                 `FORCE_COLOR`; width; the spinner), and the only module that writes
+                 ANSI (ADR-004).  (307 linhas)
   memory.rs      Memória de longo prazo por HTTP — exige URL segura (F-07).  (208 linhas)
   json.rs        `JsonSink` — o `Frontend` que fala NDJSON em vez de ANSI. O host lê
                  os eventos do stdout e responde aprovação pelo stdin.  (167 linhas)

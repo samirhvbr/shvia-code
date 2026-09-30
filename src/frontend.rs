@@ -10,6 +10,9 @@ use crate::telemetry::Telemetry;
 use crate::types::{Event, ToolCall};
 
 pub trait Frontend {
+    /// O agente vai esperar o modelo (antes de cada volta). O terminal mostra um spinner; o
+    /// host NDJSON não precisa de nada, então o padrão é não fazer nada.
+    fn waiting(&mut self) {}
     /// Evento ao vivo do stream (model / text_delta / tool_call).
     fn on_event(&mut self, ev: &Event);
     /// Fecha o bloco de texto da volta.

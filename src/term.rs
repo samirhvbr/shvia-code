@@ -4,18 +4,28 @@
 //! the log with `ESC[92mANNA` and there was no way to turn colour off. Now the rule lives here:
 //!
 //! - colour is written only when stdout is a terminal (`TERM` is not `dumb`), or when
-//!   `FORCE_COLOR` asks for it; `NO_COLOR` (no-color.org) wins over both.
+//!   `FORCE_COLOR` asks for it; `NO_COLOR` (no-color.org) wins over both;
+//! - the width comes from the terminal when there is one, from `COLUMNS` otherwise;
+//! - the spinner, which rewrites its own line, runs only where there is a terminal to write to.
 //!
 //! The decision is a pure function of the environment ([`Caps::detect`]), so the tests cover
 //! every combination without touching the real terminal.
 
-use std::io::IsTerminal;
-use std::sync::OnceLock;
+use std::io::{IsTerminal, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Caps {
     /// SGR colours and styles may be written.
     pub color: bool,
+    /// stdout is a terminal.
+    pub tty_out: bool,
+    /// `TERM=dumb`: a terminal that cannot move the cursor or paint.
+    pub dumb: bool,
 }
 
 impl Caps {
@@ -30,7 +40,12 @@ impl Caps {
         } else {
             tty_out && !dumb
         };
-        Self { color }
+        Self { color, tty_out, dumb }
+    }
+
+    /// A spinner rewrites its own line, so it needs a terminal to write to.
+    pub fn can_animate(&self) -> bool {
+        self.tty_out && !self.dumb
     }
 }
 
@@ -38,6 +53,19 @@ impl Caps {
 pub fn caps() -> &'static Caps {
     static CAPS: OnceLock<Caps> = OnceLock::new();
     CAPS.get_or_init(|| Caps::detect(|k| std::env::var(k).ok(), std::io::stdout().is_terminal()))
+}
+
+/// Terminal width in columns, clamped to something a layout can live with.
+pub fn width() -> usize {
+    let from_terminal = if caps().tty_out {
+        crossterm::terminal::size().ok().map(|(w, _)| w as usize)
+    } else {
+        None
+    };
+    from_terminal
+        .or_else(|| std::env::var("COLUMNS").ok().and_then(|v| v.trim().parse().ok()))
+        .unwrap_or(80)
+        .clamp(40, 240)
 }
 
 // ── Painting ────────────────────────────────────────────────────────────────
@@ -73,7 +101,7 @@ pub fn yellow(t: &str) -> String {
 pub fn gray(t: &str) -> String {
     paint("90", t)
 }
-/// The brand colour: what the banner uses.
+/// The brand colour: the welcome box, the assistant's marker and the spinner.
 pub fn accent(t: &str) -> String {
     paint("1;36", t)
 }
@@ -98,6 +126,30 @@ pub fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// Columns the text occupies on screen, ignoring escape sequences.
+pub fn visible_width(s: &str) -> usize {
+    strip_ansi(s).width()
+}
+
+/// Cuts `s` to at most `max` columns, ending in `…` when something was dropped.
+pub fn truncate_cols(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w + 1 > max {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
+}
+
 /// Prints text that may already carry escape codes (modules that build a whole screen at once),
 /// stripping them when colour is off.
 pub fn emit(s: &str) {
@@ -105,6 +157,70 @@ pub fn emit(s: &str) {
         print!("{s}");
     } else {
         print!("{}", strip_ansi(s));
+    }
+}
+
+// ── Spinner ─────────────────────────────────────────────────────────────────
+
+/// `✻ Pensando… (12s)`, redrawn in place until it is stopped.
+///
+/// It owns the current line while it runs, so whoever prints next must stop it first (`ui.rs`
+/// does, at the top of every method that prints). `stop` joins the thread, so by the time it
+/// returns the line is clear and nothing else writes concurrently. Dropping stops it too: an
+/// error that unwinds out of a turn cannot leave a spinner running over the message.
+pub struct Spinner {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Spinner {
+    /// `None` when there is no terminal to animate on (a pipe, `TERM=dumb`).
+    pub fn start(label: &str) -> Option<Self> {
+        if !caps().can_animate() {
+            return None;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let label = label.to_string();
+        let handle = std::thread::spawn(move || {
+            const FRAMES: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
+            let started = Instant::now();
+            let mut frame = 0usize;
+            while !flag.load(Ordering::Relaxed) {
+                let elapsed = crate::view::secs(started.elapsed().as_secs());
+                let line = format!(
+                    "{} {label} {}",
+                    accent(FRAMES[frame % FRAMES.len()]),
+                    gray(&format!("({elapsed})"))
+                );
+                {
+                    let mut out = std::io::stdout().lock();
+                    let _ = write!(out, "\r\x1b[2K{line}");
+                    let _ = out.flush();
+                }
+                frame += 1;
+                // `unpark` in `stop` wakes this at once, so stopping never waits for a frame.
+                std::thread::park_timeout(Duration::from_millis(100));
+            }
+            let mut out = std::io::stdout().lock();
+            let _ = write!(out, "\r\x1b[2K");
+            let _ = out.flush();
+        });
+        Some(Self { stop, handle: Some(handle) })
+    }
+
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            h.thread().unpark();
+            let _ = h.join();
+        }
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -137,8 +253,17 @@ mod tests {
     }
 
     #[test]
-    fn a_dumb_terminal_gets_no_colour() {
-        assert!(!Caps::detect(env(&[("TERM", "dumb")]), true).color);
+    fn a_dumb_terminal_gets_no_colour_and_no_animation() {
+        let c = Caps::detect(env(&[("TERM", "dumb")]), true);
+        assert!(c.dumb && !c.color && !c.can_animate());
+    }
+
+    #[test]
+    fn only_a_real_terminal_animates() {
+        assert!(Caps::detect(env(&[]), true).can_animate());
+        assert!(!Caps::detect(env(&[]), false).can_animate(), "a pipe has no line to rewrite");
+        // Forcing colour into a pipe does not make it animatable.
+        assert!(!Caps::detect(env(&[("FORCE_COLOR", "1")]), false).can_animate());
     }
 
     #[test]
@@ -153,5 +278,30 @@ mod tests {
         assert_eq!(strip_ansi("\x1b[1;36mANNA\x1b[0m pronto"), "ANNA pronto");
         assert_eq!(strip_ansi("\x1b[48;2;1;2;3m  \x1b[0m"), "  ");
         assert_eq!(strip_ansi("sem nada"), "sem nada");
+    }
+
+    #[test]
+    fn visible_width_ignores_escapes_and_counts_wide_chars() {
+        assert_eq!(visible_width("\x1b[1mabc\x1b[0m"), 3);
+        assert_eq!(visible_width("日本"), 4, "CJK is two columns per char");
+    }
+
+    #[test]
+    fn truncate_cols_marks_the_cut() {
+        assert_eq!(truncate_cols("curto", 10), "curto");
+        assert_eq!(truncate_cols("0123456789", 6), "01234…");
+        assert!(truncate_cols("日本語の文字", 7).width() <= 7);
+    }
+
+    #[test]
+    fn width_never_leaves_the_range_a_layout_can_use() {
+        let w = width();
+        assert!((40..=240).contains(&w), "{w}");
+    }
+
+    #[test]
+    fn a_pipe_gets_no_spinner() {
+        // Under `cargo test` stdout is not a terminal.
+        assert!(Spinner::start("Pensando…").is_none());
     }
 }

@@ -116,6 +116,7 @@ pub async fn run_turn(
                  (teto do gateway); o modelo foi avisado do corte."
             ));
         }
+        fe.waiting();
         let result =
             api::code_chat(cfg, messages, runner.tool_defs(), &mut |ev| fe.on_event(ev)).await?;
         fe.end_stream();

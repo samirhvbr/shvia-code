@@ -150,8 +150,11 @@ Formato ADR. Não relitigar direção já decidida dentro de um how-to — linka
   what the terminal supports: colour is written only when stdout is a terminal and `TERM` is not
   `dumb`, `FORCE_COLOR` forces it, `NO_COLOR` (no-color.org) wins over both. The decision is a
   pure function of the environment, tested without a terminal. Everything else asks `term`.
-- **Decision 4 — `-p` and `--json` do not change shape.** Without colour the output is the same
-  words with no escape codes. The `--json` host (SHVIA-DESKTOP, SShvTerm) talks through
+- **Decision 4 — `--json` does not change, and `-p` keeps its information.** Without colour the
+  output carries the same information in the same order, with no escape codes; the marks are
+  Unicode (`●`, `⎿`) and blank lines between blocks appear only on a terminal. What `-p | cmd`
+  used to print as `ANNA` and `⚙ tool(json)` is now `●` and `● Tool(arg)`: whoever parsed those
+  lines was parsing decoration. The `--json` host (SHVIA-DESKTOP, SShvTerm) talks through
   `JsonSink`, a different `Frontend`, which this work does not touch.
 - **Dependencies.** `crossterm` (already planned in `arquitetura-cli.md` §3: width, raw mode and
   keys for the approval menu) and `unicode-width` (already in the tree through `rustyline`: the

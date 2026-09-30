@@ -86,14 +86,6 @@ impl Project {
         }
         s
     }
-
-    pub fn header(&self, model: &str, server: &str) -> String {
-        let git = self.git_branch.clone().unwrap_or_else(|| "sem git".into());
-        format!(
-            "ANNA · ShvIA Code — projeto {} ({}) · {} @ {}",
-            self.name, git, model, server
-        )
-    }
 }
 
 fn git_root(start: &Path) -> Option<PathBuf> {

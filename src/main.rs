@@ -31,6 +31,7 @@ mod term;
 mod tools;
 mod types;
 mod ui;
+mod view;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
@@ -305,7 +306,9 @@ fn main() -> anyhow::Result<()> {
     let name = display_name();
 
     let modelo = cfg.profile.clone().unwrap_or_else(|| "modelo default".into());
-    ui.banner(&project.header(&modelo, "ShvIA"));
+    let home = std::env::var("HOME").ok();
+    let cwd = view::tildify(&project.root.display().to_string(), home.as_deref());
+    ui.welcome(VERSION.lines().next().unwrap_or("").trim(), &modelo, "ShvIA", &cwd, project.git_branch.as_deref());
     if cfg.api_key.is_none() {
         ui.warn("sem API key: exporte SHVIA_API_KEY (ou ~/.config/shvia-code/config.toml). 'anna config' mostra o estado.");
     }

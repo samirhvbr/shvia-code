@@ -6,7 +6,8 @@
 //! - colour is written only when stdout is a terminal (`TERM` is not `dumb`), or when
 //!   `FORCE_COLOR` asks for it; `NO_COLOR` (no-color.org) wins over both;
 //! - the width comes from the terminal when there is one, from `COLUMNS` otherwise;
-//! - the spinner, which rewrites its own line, runs only where there is a terminal to write to.
+//! - the spinner, which rewrites its own line, runs only where there is a terminal to write to;
+//! - the approval menu reads single keys, so it needs a terminal on BOTH ends (stdin and stdout).
 //!
 //! The decision is a pure function of the environment ([`Caps::detect`]), so the tests cover
 //! every combination without touching the real terminal.
@@ -24,13 +25,17 @@ pub struct Caps {
     pub color: bool,
     /// stdout is a terminal.
     pub tty_out: bool,
+    /// stdin is a terminal.
+    pub tty_in: bool,
     /// `TERM=dumb`: a terminal that cannot move the cursor or paint.
     pub dumb: bool,
+    /// 24-bit colour is available; otherwise the 256-colour palette is used.
+    pub truecolor: bool,
 }
 
 impl Caps {
-    /// The decision, from an environment lookup and whether stdout is a terminal.
-    pub fn detect(env: impl Fn(&str) -> Option<String>, tty_out: bool) -> Self {
+    /// The decision, from an environment lookup and whether stdout and stdin are terminals.
+    pub fn detect(env: impl Fn(&str) -> Option<String>, tty_out: bool, tty_in: bool) -> Self {
         let get = |k: &str| env(k).filter(|v| !v.is_empty());
         let dumb = get("TERM").as_deref() == Some("dumb");
         let color = if get("NO_COLOR").is_some() {
@@ -40,7 +45,14 @@ impl Caps {
         } else {
             tty_out && !dumb
         };
-        Self { color, tty_out, dumb }
+        let truecolor = get("COLORTERM")
+            .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "truecolor" | "24bit"));
+        Self { color, tty_out, tty_in, dumb, truecolor }
+    }
+
+    /// Key-by-key input makes sense: a terminal on both ends.
+    pub fn interactive(&self) -> bool {
+        self.tty_out && self.tty_in && !self.dumb
     }
 
     /// A spinner rewrites its own line, so it needs a terminal to write to.
@@ -52,7 +64,13 @@ impl Caps {
 /// The real environment, read once.
 pub fn caps() -> &'static Caps {
     static CAPS: OnceLock<Caps> = OnceLock::new();
-    CAPS.get_or_init(|| Caps::detect(|k| std::env::var(k).ok(), std::io::stdout().is_terminal()))
+    CAPS.get_or_init(|| {
+        Caps::detect(
+            |k| std::env::var(k).ok(),
+            std::io::stdout().is_terminal(),
+            std::io::stdin().is_terminal(),
+        )
+    })
 }
 
 /// Terminal width in columns, clamped to something a layout can live with.
@@ -104,6 +122,16 @@ pub fn gray(t: &str) -> String {
 /// The brand colour: the welcome box, the assistant's marker and the spinner.
 pub fn accent(t: &str) -> String {
     paint("1;36", t)
+}
+
+/// SGR parameters for a background: true colour when the terminal has it, else the closest
+/// entry of the 256-colour palette.
+pub fn bg_params(caps: &Caps, rgb: (u8, u8, u8), fallback256: u8) -> String {
+    if caps.truecolor {
+        format!("48;2;{};{};{}", rgb.0, rgb.1, rgb.2)
+    } else {
+        format!("48;5;{fallback256}")
+    }
 }
 
 /// Removes CSI escape sequences (`ESC [ ... final`), leaving the text a person would read.
@@ -234,36 +262,53 @@ mod tests {
 
     #[test]
     fn a_terminal_gets_colour_and_a_pipe_does_not() {
-        assert!(Caps::detect(env(&[]), true).color);
-        assert!(!Caps::detect(env(&[]), false).color, "stdout piped");
+        assert!(Caps::detect(env(&[]), true, true).color);
+        assert!(!Caps::detect(env(&[]), false, false).color, "stdout piped");
     }
 
     #[test]
     fn no_color_wins_over_everything() {
-        assert!(!Caps::detect(env(&[("NO_COLOR", "1")]), true).color);
-        assert!(!Caps::detect(env(&[("NO_COLOR", "1"), ("FORCE_COLOR", "1")]), true).color);
+        assert!(!Caps::detect(env(&[("NO_COLOR", "1")]), true, true).color);
+        assert!(!Caps::detect(env(&[("NO_COLOR", "1"), ("FORCE_COLOR", "1")]), true, true).color);
         // An empty NO_COLOR is "not set" (no-color.org).
-        assert!(Caps::detect(env(&[("NO_COLOR", "")]), true).color);
+        assert!(Caps::detect(env(&[("NO_COLOR", "")]), true, true).color);
     }
 
     #[test]
     fn force_color_paints_a_pipe_but_zero_does_not() {
-        assert!(Caps::detect(env(&[("FORCE_COLOR", "1")]), false).color);
-        assert!(!Caps::detect(env(&[("FORCE_COLOR", "0")]), false).color);
+        assert!(Caps::detect(env(&[("FORCE_COLOR", "1")]), false, false).color);
+        assert!(!Caps::detect(env(&[("FORCE_COLOR", "0")]), false, false).color);
     }
 
     #[test]
     fn a_dumb_terminal_gets_no_colour_and_no_animation() {
-        let c = Caps::detect(env(&[("TERM", "dumb")]), true);
+        let c = Caps::detect(env(&[("TERM", "dumb")]), true, true);
         assert!(c.dumb && !c.color && !c.can_animate());
     }
 
     #[test]
+    fn interactive_needs_a_terminal_on_both_ends() {
+        assert!(Caps::detect(env(&[]), true, true).interactive());
+        assert!(!Caps::detect(env(&[]), true, false).interactive(), "stdin piped: no menu");
+        assert!(!Caps::detect(env(&[]), false, true).interactive(), "stdout piped: no menu");
+        assert!(!Caps::detect(env(&[("TERM", "dumb")]), true, true).interactive());
+    }
+
+    #[test]
+    fn truecolor_comes_from_colorterm_and_the_background_falls_back_to_256() {
+        let tc = Caps::detect(env(&[("COLORTERM", "truecolor")]), true, true);
+        let no = Caps::detect(env(&[("TERM", "xterm-256color")]), true, true);
+        assert!(tc.truecolor && !no.truecolor);
+        assert_eq!(bg_params(&tc, (1, 2, 3), 22), "48;2;1;2;3");
+        assert_eq!(bg_params(&no, (1, 2, 3), 22), "48;5;22");
+    }
+
+    #[test]
     fn only_a_real_terminal_animates() {
-        assert!(Caps::detect(env(&[]), true).can_animate());
-        assert!(!Caps::detect(env(&[]), false).can_animate(), "a pipe has no line to rewrite");
+        assert!(Caps::detect(env(&[]), true, true).can_animate());
+        assert!(!Caps::detect(env(&[]), false, false).can_animate(), "a pipe has no line to rewrite");
         // Forcing colour into a pipe does not make it animatable.
-        assert!(!Caps::detect(env(&[("FORCE_COLOR", "1")]), false).can_animate());
+        assert!(!Caps::detect(env(&[("FORCE_COLOR", "1")]), false, false).can_animate());
     }
 
     #[test]

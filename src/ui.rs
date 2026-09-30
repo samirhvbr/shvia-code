@@ -8,6 +8,7 @@
 use crate::diff;
 use crate::frontend::Frontend;
 use crate::gate::{self, Policy, Preview};
+use crate::menu::{self, Answer, Item};
 use crate::render;
 use crate::telemetry::Telemetry;
 use crate::term::{self, Spinner};
@@ -114,14 +115,22 @@ impl Ui {
     fn render_preview(&self, preview: &Preview) {
         match preview {
             Preview::Diff { path, old, new } => {
-                print!("{}", diff::unified(path, old, new, term::caps().color))
+                print!("{}", diff::pretty(path, old, new, term::width(), term::caps()))
             }
             Preview::Command { command, why } => {
-                let suffix = if why.is_empty() { String::new() } else { format!("   # {why}") };
-                println!("  $ {command}{suffix}");
+                for (i, l) in command.lines().enumerate() {
+                    let lead = if i == 0 { term::gray("$") } else { " ".to_string() };
+                    println!("  {lead} {l}");
+                }
+                if !why.is_empty() {
+                    println!("  {}", term::gray(&format!("# {why}")));
+                }
             }
             Preview::Commit { stat, message } => {
-                println!("  commit:\n{stat}\n  mensagem: {message}");
+                for l in stat.lines() {
+                    println!("  {}", term::gray(l));
+                }
+                println!("  {} {message}", term::bold("mensagem:"));
             }
         }
     }
@@ -130,13 +139,60 @@ impl Ui {
     fn decide(&mut self, policy: Policy, scope: &str, preview: &Preview) -> bool {
         match policy {
             Policy::Auto => true,
-            Policy::Confirm if self.allowed.contains(scope) => true,
+            Policy::Confirm if self.allowed.contains(scope) => {
+                // "Tudo nesta sessão" dispensa a pergunta, não a vista: o que vai ser gravado
+                // continua na tela.
+                self.render_preview(preview);
+                true
+            }
             _ => {
                 self.render_preview(preview);
                 if self.non_interactive {
                     return false;
                 }
-                if policy == Policy::Always {
+                self.ask(policy, scope)
+            }
+        }
+    }
+
+    /// Pergunta ao dev. No terminal é o menu de setas; sem terminal, a linha no stdin de sempre.
+    /// Esc, Ctrl-C e erro do terminal são "não".
+    fn ask(&mut self, policy: Policy, scope: &str) -> bool {
+        let destructive = policy == Policy::Always;
+        let question = question_for(scope, destructive);
+        // Destrutivo abre em "Não": o Enter distraído recusa. "Tudo nesta sessão" não existe aqui.
+        let (items, default): (Vec<Item>, usize) = if destructive {
+            (vec![Item { label: "Sim, executar", hotkeys: "sy" }, Item { label: "Não", hotkeys: "n" }], 1)
+        } else {
+            (
+                vec![
+                    Item { label: "Sim", hotkeys: "sy" },
+                    Item { label: "Sim, e não perguntar de novo nesta sessão", hotkeys: "t" },
+                    Item { label: "Não", hotkeys: "n" },
+                ],
+                0,
+            )
+        };
+        match menu::choose(&question, &items, default) {
+            Answer::Picked(i) => {
+                let yes = if destructive { i == 0 } else { i < 2 };
+                if yes && !destructive && i == 1 {
+                    self.allowed.insert(scope.to_string());
+                }
+                let label = items[i].label;
+                if yes {
+                    println!("  {} {label}", term::green("✔"));
+                } else {
+                    println!("  {} {label}", term::red("✘"));
+                }
+                yes
+            }
+            Answer::Cancelled => {
+                println!("  {} Não", term::red("✘"));
+                false
+            }
+            Answer::Unavailable => {
+                if destructive {
                     matches!(gate::ask("  AÇÃO DESTRUTIVA — confirmar? [s]im / [n]ão > "), 'S' | 's')
                 } else {
                     match gate::ask("  aplicar? [s]im / [n]ão / [t]udo nesta sessão > ") {
@@ -150,6 +206,19 @@ impl Ui {
                 }
             }
         }
+    }
+}
+
+/// O que se pergunta, por ferramenta.
+fn question_for(scope: &str, destructive: bool) -> String {
+    match (scope, destructive) {
+        ("bash", true) => "Ação destrutiva — executar este comando?".into(),
+        ("bash", false) => "Executar este comando?".into(),
+        ("edit_file", _) => "Aplicar esta edição?".into(),
+        ("write_file", _) => "Gravar este arquivo?".into(),
+        ("git_commit", _) => "Criar este commit?".into(),
+        (_, true) => "Ação destrutiva — confirmar?".into(),
+        _ => "Permitir?".into(),
     }
 }
 
@@ -253,12 +322,7 @@ impl Frontend for Ui {
             // -p/CI: ninguém para responder — encerra o turno (o warn orienta).
             return false;
         }
-        matches!(
-            gate::ask(&format!(
-                "  teto de {teto} voltas do turno atingido — continuar mais um lote? [s]im / [n]ão > "
-            )),
-            's' | 'S'
-        )
+        gate::confirm(&format!("Teto de {teto} voltas do turno atingido — continuar mais um lote?"))
     }
 
     fn approve(&mut self, policy: Policy, scope: &str, _id: &str, preview: &Preview) -> bool {
@@ -269,6 +333,20 @@ impl Frontend for Ui {
             self.start_spinner("Executando…");
         }
         go
+    }
+}
+
+#[cfg(test)]
+mod tests_perguntas {
+    use super::*;
+
+    #[test]
+    fn cada_ferramenta_faz_a_sua_pergunta() {
+        assert_eq!(question_for("edit_file", false), "Aplicar esta edição?");
+        assert_eq!(question_for("write_file", false), "Gravar este arquivo?");
+        assert_eq!(question_for("git_commit", false), "Criar este commit?");
+        assert_eq!(question_for("bash", false), "Executar este comando?");
+        assert!(question_for("bash", true).starts_with("Ação destrutiva"));
     }
 }
 

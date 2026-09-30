@@ -2,6 +2,8 @@
 //! do preview moram no `Frontend` (CLI = ANSI+stdin; JSON = evento+stdin),
 //! porque quem mostra é quem pergunta. **Não existe modo yolo.**
 
+use crate::menu::{self, Answer, Item};
+use crate::term;
 use std::io::{self, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,4 +42,21 @@ pub fn ask(msg: &str) -> char {
         return 'n';
     }
     line.trim().chars().next().unwrap_or('n')
+}
+
+/// A yes/no question. On a terminal it is the arrow-key menu with "Não" one key away; elsewhere
+/// it is the old line on stdin. Anything but an explicit yes is a no.
+pub fn confirm(question: &str) -> bool {
+    let items = [Item { label: "Sim", hotkeys: "sy" }, Item { label: "Não", hotkeys: "n" }];
+    match menu::choose(question, &items, 0) {
+        Answer::Picked(0) => {
+            println!("  {} Sim", term::green("✔"));
+            true
+        }
+        Answer::Picked(_) | Answer::Cancelled => {
+            println!("  {} Não", term::red("✘"));
+            false
+        }
+        Answer::Unavailable => matches!(ask(&format!("  {question} [s]im / [n]ão > ")), 'S' | 's'),
+    }
 }

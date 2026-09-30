@@ -181,6 +181,26 @@ fn bash_lines(out: &str, room: usize) -> Vec<Line> {
     shown
 }
 
+/// The line above a diff: "2 linhas adicionadas, 1 linha removida" / "Novo arquivo · 3 linhas".
+pub fn diff_summary(adds: usize, dels: usize, new_file: bool) -> String {
+    if adds == 0 && dels == 0 {
+        return "sem mudanças".into();
+    }
+    if new_file {
+        return format!("Novo arquivo · {}", plural(adds, "linha", "linhas"));
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if adds > 0 {
+        parts.push(plural(adds, "linha adicionada", "linhas adicionadas"));
+    }
+    if dels > 0 {
+        parts.push(plural(dels, "linha removida", "linhas removidas"));
+    }
+    let text = parts.join(", ");
+    let mut chars = text.chars();
+    chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or(text)
+}
+
 // ── Numbers ─────────────────────────────────────────────────────────────────
 
 /// "14s", "1m 05s".
@@ -382,6 +402,15 @@ mod tests {
         let out = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-velho\n+novo\n+outro";
         assert_eq!(texts(&result_lines("git_diff", out, 80)), ["7 linhas de diff (+2 −1)"]);
         assert_eq!(texts(&result_lines("git_diff", "(sem saída)", 80)), ["sem mudanças"]);
+    }
+
+    #[test]
+    fn the_diff_summary_counts_in_portuguese() {
+        assert_eq!(diff_summary(1, 1, false), "1 linha adicionada, 1 linha removida");
+        assert_eq!(diff_summary(3, 0, false), "3 linhas adicionadas");
+        assert_eq!(diff_summary(0, 2, false), "2 linhas removidas");
+        assert_eq!(diff_summary(4, 0, true), "Novo arquivo · 4 linhas");
+        assert_eq!(diff_summary(0, 0, false), "sem mudanças");
     }
 
     #[test]

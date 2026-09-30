@@ -159,7 +159,7 @@ pub async fn executar(
     // ── Gate do dev: nada roda sem ele ver o plano ───────────────────────────
     ui.note("── plano ──────────────────────────────────────────────");
     ui.note(&plano.resumo());
-    if !matches!(gate::ask("  executar este plano? [s]im / [n]ão > "), 'S' | 's') {
+    if !gate::confirm("Executar este plano?") {
         ui.note("(plano descartado — nada foi alterado)");
         tel_total.absorver(&tel_arq);
         return Ok(());

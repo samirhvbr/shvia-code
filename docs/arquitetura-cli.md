@@ -39,9 +39,9 @@ src/
                  write_file, bash e git. Inclui a ALLOWLIST e a classificação por
                  token (F-02/F-03), o teto de tempo e a morte do GRUPO (F-04), e a
                  leitura de destrutivo por token (F-05). É o maior do repo — o
-                 cabeçalho do arquivo admite e diz por que ainda não foi partido.  (1471 linhas)
+                 cabeçalho do arquivo admite e diz por que ainda não foi partido.  (1688 linhas)
   main.rs        Entrypoint: args (clap, declarados aqui — não há `cli.rs`), config,
-                 modo REPL ou `-p/--print` não-interativo. Réguas do repositório.  (761 linhas)
+                 modo REPL ou `-p/--print` não-interativo. Réguas do repositório.  (866 linhas)
   stats.rs       O cérebro do `anna stats` (a tela "Wrapped"): agrega as sessões
                  locais em números, heatmap e quebra por modelo. Puro e testável.  (549 linhas)
   config.rs      `~/.config/shvia-code/config.toml` (0600) + overrides por env
@@ -51,24 +51,27 @@ src/
   stats_html.rs  Render das estatísticas em HTML (escapa o que interpola — F-08).  (278 linhas)
   session.rs     `~/.shvia-code/sessions/<id>.json` (0600): salvar, retomar, limpar
                  por idade.  (257 linhas)
-  stats_term.rs  Render das estatísticas no terminal.  (252 linhas)
+  stats_term.rs  Render das estatísticas no terminal.  (280 linhas)
   agent.rs       O LOOP agêntico (§4): monta payload, consome eventos, dispara tools,
-                 reenvia. Teto de voltas. Agnóstico de UI.  (221 linhas)
+                 reenvia. Teto de voltas. Agnóstico de UI.  (222 linhas)
+  menu.rs        The approval menu: a short list picked with arrows, a number or a
+                 letter. A pure state machine plus the raw-mode drawing; a cancelled
+                 menu is a "no" (ADR-004).  (265 linhas)
   ui.rs          A interface do terminal: stream com o `●` do assistente, títulos e
                  resumos de ferramenta, spinner, rodapé, prompts de gate. O `repl.rs`/
-                 `tui.rs` do plano não existem; não há TUI (ratatui) neste código (ADR-004).  (284 linhas)
+                 `tui.rs` do plano não existem; não há TUI (ratatui) neste código (ADR-004).  (362 linhas)
   view.rs        What a turn looks like, as pure functions: `● Read(path)` titles,
                  `⎿` result summaries, the footer, the welcome box. Nothing prints, so
-                 all of it is tested without a terminal.  (435 linhas)
+                 all of it is tested without a terminal.  (464 linhas)
   term.rs        What the terminal supports, decided once (colour: TTY, `NO_COLOR`,
                  `FORCE_COLOR`; width; the spinner), and the only module that writes
-                 ANSI (ADR-004).  (307 linhas)
+                 ANSI (ADR-004).  (352 linhas)
   memory.rs      Memória de longo prazo por HTTP — exige URL segura (F-07).  (208 linhas)
   json.rs        `JsonSink` — o `Frontend` que fala NDJSON em vez de ANSI. O host lê
                  os eventos do stdout e responde aprovação pelo stdin.  (167 linhas)
   checkpoint.rs  Checkpoint de segurança: antes de TODA mutação aprovada, fotografa o
                  working tree num commit FORA da branch (índice temporário,
-                 `refs/anna/checkpoint`). Não toca o índice do dev.  (150 linhas)
+                 `refs/anna/checkpoint`). Não toca o índice do dev.  (183 linhas)
   api.rs         Cliente do gateway (`POST /api/v1/code/chat`) + parser do SSE. Uma
                  chamada = uma "volta". O `sse.rs` separado nunca existiu.  (149 linhas)
   types.rs       Structs do protocolo (docs/protocolo.md). Serde apenas, sem lógica.  (139 linhas)
@@ -76,20 +79,21 @@ src/
                  `anna`; `HostRunner` só PROPÕE e espera a casca externa devolver o
                  resultado.  (129 linhas)
   project.rs     Detecta a raiz (git), lê ANNA.md / CLAUDE.md / AGENTS.md, monta o
-                 system prompt e o cabeçalho da sessão.  (113 linhas)
+                 system prompt e o cabeçalho da sessão.  (105 linhas)
   papel.rs       Papéis do pipeline (arquiteto → executor → revisor) e o elenco:
                  a tabela papel → (perfil, esforço) do `config.toml`.  (82 linhas)
   guard.rs       Denylist de leitura + confinamento à raiz do projeto (realpath).  (80 linhas)
   render.rs      Markdown **por linha**, para funcionar com streaming: cada linha é
-                 estilizada quando fica completa.  (60 linhas)
-  diff.rs        Diff unificado (crate `similar`) — o preview de `edit_file` e
-                 `write_file`, colorido no terminal e cru no NDJSON.  (44 linhas)
-  gate.rs        Política de aprovação: Allow|Deny; memória do "sempre nesta sessão"
-                 por (tool, escopo). Sem yolo.  (43 linhas)
+                 estilizada quando fica completa.  (65 linhas)
+  diff.rs        Diff (crate `similar`) — o preview de `edit_file` e `write_file`:
+                 `pretty` no terminal (número de linha, fundo vermelho/verde), `unified`
+                 cru no NDJSON.  (151 linhas)
+  gate.rs        Política de aprovação (Auto|Confirm|Always), o que mostrar antes de
+                 aprovar e `confirm` (sim/não pelo menu, ou a linha do stdin). Sem yolo.  (62 linhas)
   telemetry.rs   Custo/tokens por turno, a partir do evento `usage`.  (43 linhas)
   frontend.rs    O trait `Frontend`: renderizar os eventos do turno e DECIDIR
                  aprovações. É o que deixa o motor embutível — o mesmo
-                 `agent::run_turn` serve o terminal e um host externo.  (38 linhas)
+                 `agent::run_turn` serve o terminal e um host externo.  (41 linhas)
 ```
 
 Não há `error.rs`: os erros usam `anyhow` no ponto de uso. A regra que aquele módulo

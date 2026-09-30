@@ -16,6 +16,7 @@ mod gate;
 mod guard;
 mod json;
 mod memory;
+mod menu;
 mod orquestrador;
 mod papel;
 mod plano;

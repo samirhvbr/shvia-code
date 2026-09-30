@@ -3,6 +3,29 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.12.5 - an edit shows a numbered diff on a red/green band, and approving is an arrow-key menu
+
+Third delivery of the visual work (ADR-004): what the person sees and answers before anything is
+written or run.
+
+- **The diff** (`diff::pretty`) has a summary line ("2 linhas adicionadas, 1 linha removida"), the
+  line number of every changed line, its sign, and — on a terminal with colour — a red or green
+  background across the whole width (true colour when `COLORTERM` says so, the 256-colour palette
+  otherwise). Unchanged context is grey. A new file says "Novo arquivo · N linhas". Nothing is
+  left out of the preview: the approval is for the whole change. Without colour the same lines
+  come out plain, numbers and signs intact. `diff::unified` stays as it was for the NDJSON host.
+- **The approval is a menu** (`src/menu.rs`): arrow keys and Enter, a number (`1`/`2`/`3`) or a
+  letter (`s`, `t`, `n`). Esc, Ctrl-C, `q` and a terminal error all refuse. A destructive command
+  opens with the cursor on "Não", so a stray Enter refuses; it has no "don't ask again". After
+  the answer the menu is erased and one line stays in the scrollback (`✔ Sim`, `✘ Não`).
+  The same menu asks whether to run the orchestrator's plan and whether to give the turn one more
+  batch of steps.
+- **Without a terminal on both ends** (a pipe, `TERM=dumb`) the question is the line on stdin it
+  always was, and `anna -p` still refuses writes and commands that need a card.
+- **"Don't ask again this session" no longer hides the change.** The diff or command is still
+  printed for what it lets through, only the question is skipped.
+- A command's preview is the command and its reason; a commit's is the staged stat and the message.
+
 ## 0.12.4 - the turn reads like Claude Code: ● for an action, ⎿ for its result, a spinner while the model thinks
 
 Second delivery of the visual work (ADR-004). What `anna` prints while a turn runs.

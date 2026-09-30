@@ -51,6 +51,11 @@ anna stats --html --open        # exporta a página HTML e abre no navegador
 
 Comandos do REPL: `/help` · `/plano <pedido>` · `/model [perfil]` · `/sessions` · `/stats` · `/tools` · `/clear` · `/exit`.
 
+**Aprovações.** Escrita e comando mostram o que vai acontecer (o diff, com número de linha e fundo
+vermelho/verde) e perguntam num menu: setas + Enter, ou `1`/`2`/`3`, ou `s`/`t`/`n`. Esc e Ctrl-C
+recusam. O comando destrutivo abre com o cursor em "Não". Sem terminal (pipe, `-p`) a pergunta volta a
+ser uma linha no stdin, e o `-p` continua negando escrita.
+
 **Cor.** O `anna` só escreve cor quando a saída é um terminal: em pipe ou redirecionamento
 (`anna -p "…" | tee log`) saem as mesmas palavras, sem códigos de escape. `NO_COLOR=1` desliga
 sempre; `FORCE_COLOR=1` liga mesmo em pipe.

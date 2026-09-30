@@ -9,7 +9,7 @@ use crate::diff;
 use crate::frontend::Frontend;
 use crate::gate::{self, Policy, Preview};
 use crate::menu::{self, Answer, Item};
-use crate::render;
+use crate::render::Md;
 use crate::telemetry::Telemetry;
 use crate::term::{self, Spinner};
 use crate::types::{Event, ToolCall};
@@ -22,7 +22,8 @@ pub struct Ui {
     /// O `●` do assistente já saiu para o bloco de texto em andamento.
     bullet_shown: bool,
     line_buf: String,
-    in_code: bool,
+    /// O markdown da resposta em andamento (cerca aberta, tabela pendente).
+    md: Md,
     /// Escopos liberados por "tudo nesta sessão".
     allowed: HashSet<String>,
     /// `anna -p`: nega escrita/bash por padrão (sem quem confirmar).
@@ -87,10 +88,24 @@ impl Ui {
     }
 
     fn print_line(&mut self, line: &str) {
+        for styled in self.md.feed(line) {
+            self.print_styled(&styled);
+        }
+    }
+
+    /// O que o markdown ainda segurava (uma tabela que terminou com a resposta).
+    fn flush_md(&mut self) {
+        for styled in self.md.finish() {
+            self.print_styled(&styled);
+        }
+    }
+
+    /// Uma linha já estilizada, com a margem do assistente: o `●` na primeira, dois espaços nas outras.
+    fn print_styled(&mut self, styled: &str) {
         let lead = if self.bullet_shown {
             "  ".to_string()
         } else {
-            if line.trim().is_empty() {
+            if styled.trim().is_empty() {
                 return; // um bloco não abre com linha em branco
             }
             if std::mem::take(&mut self.gap_before_text) {
@@ -98,12 +113,6 @@ impl Ui {
             }
             self.bullet_shown = true;
             format!("{} ", term::accent("●"))
-        };
-        let styled = if line.trim_start().starts_with("```") {
-            self.in_code = !self.in_code;
-            term::gray("┄┄┄")
-        } else {
-            render::style_line(line, self.in_code)
         };
         if styled.trim().is_empty() {
             println!();
@@ -249,6 +258,7 @@ impl Frontend for Ui {
             Event::ToolCall(c) => {
                 self.stop_spinner();
                 self.flush_pending();
+                self.flush_md();
                 if self.bullet_shown {
                     self.gap();
                 }
@@ -265,8 +275,9 @@ impl Frontend for Ui {
     fn end_stream(&mut self) {
         self.stop_spinner();
         self.flush_pending();
+        self.flush_md();
+        self.md.reset();
         self.bullet_shown = false;
-        self.in_code = false;
     }
 
     fn tool_result(&mut self, call: &ToolCall, out: &str) {

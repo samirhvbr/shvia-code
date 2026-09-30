@@ -129,7 +129,7 @@ Formato ADR. Não relitigar direção já decidida dentro de um how-to — linka
 
 ## ADR-004 — The terminal's look: restyle the output, keep `rustyline`, one module owns the escape codes
 
-- **Data:** 30/09/2026 · **Status:** Aceito (em entrega: 0.12.3 a 0.12.6)
+- **Data:** 30/09/2026 · **Status:** Aceito (entregue em 0.12.3 a 0.12.6; a etapa 5, o compositor de entrada, segue em aberto)
 - **Context:** the owner asked for `anna` to look more like Claude Code or Codex, "the look
   first, features later". What was there: ANSI escape codes written by hand in four modules
   (`ui.rs`, `render.rs`, `diff.rs`, `stats_term.rs`), no test for a terminal, no `NO_COLOR`, no

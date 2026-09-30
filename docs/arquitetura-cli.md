@@ -59,13 +59,13 @@ src/
                  menu is a "no" (ADR-004).  (265 linhas)
   ui.rs          A interface do terminal: stream com o `●` do assistente, títulos e
                  resumos de ferramenta, spinner, rodapé, prompts de gate. O `repl.rs`/
-                 `tui.rs` do plano não existem; não há TUI (ratatui) neste código (ADR-004).  (362 linhas)
+                 `tui.rs` do plano não existem; não há TUI (ratatui) neste código (ADR-004).  (373 linhas)
   view.rs        What a turn looks like, as pure functions: `● Read(path)` titles,
                  `⎿` result summaries, the footer, the welcome box. Nothing prints, so
                  all of it is tested without a terminal.  (464 linhas)
   term.rs        What the terminal supports, decided once (colour: TTY, `NO_COLOR`,
                  `FORCE_COLOR`; width; the spinner), and the only module that writes
-                 ANSI (ADR-004).  (352 linhas)
+                 ANSI (ADR-004).  (349 linhas)
   memory.rs      Memória de longo prazo por HTTP — exige URL segura (F-07).  (208 linhas)
   json.rs        `JsonSink` — o `Frontend` que fala NDJSON em vez de ANSI. O host lê
                  os eventos do stdout e responde aprovação pelo stdin.  (167 linhas)
@@ -84,7 +84,9 @@ src/
                  a tabela papel → (perfil, esforço) do `config.toml`.  (82 linhas)
   guard.rs       Denylist de leitura + confinamento à raiz do projeto (realpath).  (80 linhas)
   render.rs      Markdown **por linha**, para funcionar com streaming: cada linha é
-                 estilizada quando fica completa.  (65 linhas)
+                 estilizada quando fica completa. `Md` guarda o pouco estado que uma
+                 linha não basta para saber (cerca aberta e sua linguagem, tabela
+                 pendente); estilos aninham; destaque de sintaxe por linha.  (671 linhas)
   diff.rs        Diff (crate `similar`) — o preview de `edit_file` e `write_file`:
                  `pretty` no terminal (número de linha, fundo vermelho/verde), `unified`
                  cru no NDJSON.  (151 linhas)

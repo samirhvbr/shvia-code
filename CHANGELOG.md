@@ -3,6 +3,28 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.12.6 - the answer is rendered as markdown: nested lists, tables, quotes, links and highlighted code
+
+Fourth and last delivery of the restyle (ADR-004). `render.rs` was three regexes over one line;
+it is now `Md`, which keeps the little state a line cannot know.
+
+- **Lists and blocks.** Bullets nest (`•`, `◦`, `▪`), checkboxes become `☑`/`☐`, numbered lists
+  keep their numbers, a quote gets a bar, `---` a rule. Headings lose their hashes and are styled
+  by level.
+- **Tables** are held back until the last row and then drawn with box characters, columns aligned
+  as the separator row says (left, right, centre). A table wider than the screen falls back to
+  plain rows instead of wrapping into a mess; pipes without a separator row stay text.
+- **Links** show their text underlined and the address after it; `~~strike~~` works.
+- **Code blocks** show their language and colour keywords, strings, numbers and comments for
+  Rust, Python, JavaScript/TypeScript, shell, PHP, Go, SQL, JSON, TOML and YAML. One line at a
+  time, so a multi-line comment or string colours only its first line. An unknown language stays
+  plain.
+- **Styles nest.** Each one is switched off by its own code, not by a full reset, so a code span
+  inside bold no longer cancels the bold, and a heading keeps its weight around an inline code.
+- Without colour the markers are dropped and nothing is added; code spans keep their backticks,
+  because they carry meaning. A fence left open at the end of an answer no longer leaks into the
+  next one.
+
 ## 0.12.5 - an edit shows a numbered diff on a red/green band, and approving is an arrow-key menu
 
 Third delivery of the visual work (ADR-004): what the person sees and answers before anything is

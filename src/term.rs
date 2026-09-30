@@ -104,9 +104,6 @@ pub fn paint(sgr: &str, text: &str) -> String {
 pub fn bold(t: &str) -> String {
     paint("1", t)
 }
-pub fn dim(t: &str) -> String {
-    paint("2", t)
-}
 pub fn red(t: &str) -> String {
     paint("91", t)
 }

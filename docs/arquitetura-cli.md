@@ -217,6 +217,26 @@ por causa de um hook mal configurado trocaria um vazamento por uma indisponibili
 - **C2**: `tools/edit,shell,git` + gates de escrita/confirm/destrutivo + `similar`.
 - **C3**: `session` resume, `/model`, `ui/tui` opcional, ANNA.md.
 - **C4**: `build-local.sh` (feito) + binários + checksums + dogfood.
+- **C5 (future)** — items as they are approved:
+  - **Listing infras and models** (proposed 29/09/2026). Nothing in `anna` shows what can be
+    used today: `/model` with no argument prints only the current profile, and `/model x`
+    accepts any string unchecked, so a stale default or a typo comes back from the gateway as
+    a routing error. Seen on 29/09/2026: `deepseek/deepseek-v3.2` was the pinned model, it
+    exists only on `kilo`, and the CLI could not say so.
+    - **Infras.** List the infras the user can actually use — enabled (`disabled: false`) and
+      with an API configured (`api_key_configured`) — with their status (`online`), data
+      locality (`data_locality`) and model count. Suggested surface: `anna infras` and
+      `/infras`. Disabled or keyless infras stay out of the default view; `--all` shows them
+      with the reason.
+    - **Models.** List per infra, the user's favorites first (`is_favorite`, the list stored on
+      the account through `PUT /api/v1/me/favorite-models`), and `--all` for the full
+      catalogue — `kilo` and `openrouter` have 390+ models each. Each line is the exact
+      `model@infra` string that `--model` and `/model` take. Suggested surface:
+      `anna models [infra]` and `/models [infra]`.
+    - **Data.** No server work: `GET /api/v1/servers` and `GET /api/v1/profiles` already answer
+      to an API key (`auth:sanctum,apikey`, no ability gate) and carry every field above. Only
+      the client is missing. `/profiles` is about 640 KB for roughly 1000 profiles, so fetch it
+      once per command and filter client-side; both routes share the 60/min bucket.
 
 ## 8. Testes
 

@@ -3,6 +3,18 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.12.2 - the roadmap gains the C5 item to list usable infras and their favorite models
+
+Documentation only. `docs/arquitetura-cli.md` §7 now carries a C5 item: `anna` should list the
+infras the user can use (enabled, API configured, online) and, per infra, the favorite models,
+in the exact `model@infra` form that `--model` and `/model` take.
+
+Why: nothing in the CLI shows what can be used. On 29/09/2026 a benchmark install failed with
+`Modelo "deepseek/deepseek-v3.2" não encontrado no servidor "minimax"`, and finding the server
+that does have it (`kilo`) took reading the gateway. The gateway already answers `GET /api/v1/servers`
+and `GET /api/v1/profiles` to an API key, with `is_favorite`, `api_key_configured` and `online`,
+so the item is client-only.
+
 ## 0.12.1 - CI runs on the self-hosted runner cicd while the repository variable CI_RUNNER names it
 
 The account's GitHub Actions budget ran out on 25/09/2026, and since then this private repository's jobs

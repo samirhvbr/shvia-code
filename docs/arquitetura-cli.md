@@ -56,6 +56,8 @@ src/
                  reenvia. Teto de voltas. Agnóstico de UI.  (221 linhas)
   ui.rs          A interface do terminal: stream, prompts de gate. O `repl.rs`/`tui.rs`
                  do plano não existem; não há TUI (ratatui) neste código.  (218 linhas)
+  term.rs        What the terminal supports, decided once (colour: TTY, `NO_COLOR`,
+                 `FORCE_COLOR`), and the only module that writes ANSI (ADR-004).  (157 linhas)
   memory.rs      Memória de longo prazo por HTTP — exige URL segura (F-07).  (208 linhas)
   json.rs        `JsonSink` — o `Frontend` que fala NDJSON em vez de ANSI. O host lê
                  os eventos do stdout e responde aprovação pelo stdin.  (167 linhas)

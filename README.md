@@ -51,6 +51,10 @@ anna stats --html --open        # exporta a página HTML e abre no navegador
 
 Comandos do REPL: `/help` · `/plano <pedido>` · `/model [perfil]` · `/sessions` · `/stats` · `/tools` · `/clear` · `/exit`.
 
+**Cor.** O `anna` só escreve cor quando a saída é um terminal: em pipe ou redirecionamento
+(`anna -p "…" | tee log`) saem as mesmas palavras, sem códigos de escape. `NO_COLOR=1` desliga
+sempre; `FORCE_COLOR=1` liga mesmo em pipe.
+
 O **[`/plano`](docs/orquestrador.md)** roda a tarefa como pipeline de papéis em
 vez de um modelo fazendo tudo: o **arquiteto** (só leitura) propõe um plano
 arquivo-a-arquivo, **você aprova ou não**, o **executor** aplica passo a passo

@@ -27,6 +27,7 @@ mod stats;
 mod stats_html;
 mod stats_term;
 mod telemetry;
+mod term;
 mod tools;
 mod types;
 mod ui;
@@ -327,7 +328,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut rl = DefaultEditor::new()?;
     loop {
-        match rl.readline("\x1b[1mvocê ›\x1b[0m ") {
+        match rl.readline(&format!("{} ", term::bold("você ›"))) {
             Ok(line) => {
                 let line = line.trim().to_string();
                 if line.is_empty() {

@@ -4,6 +4,33 @@
 //! tabela. Só desenha o que o `stats` já agregou — nada de I/O aqui.
 
 use crate::stats::{self, Range, Stats, Tab};
+use crate::term;
+use std::cell::RefCell;
+use std::fmt::Write as _;
+
+thread_local! {
+    /// The screen is composed here and leaves in one piece through `term::emit`, which strips
+    /// the colour codes when colour is off (a piped `anna stats` used to carry them).
+    static SCREEN: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+macro_rules! out {
+    ($($a:tt)*) => {
+        SCREEN.with(|s| {
+            let _ = write!(s.borrow_mut(), $($a)*);
+        })
+    };
+}
+
+macro_rules! outln {
+    () => {
+        out!("\n")
+    };
+    ($($a:tt)*) => {{
+        out!($($a)*);
+        out!("\n");
+    }};
+}
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -32,11 +59,12 @@ fn palette(level: u8) -> u8 {
 pub fn render(s: &Stats, tab: Tab, name: &str) {
     header(s, name);
     tabs(tab);
-    println!();
+    outln!();
     match tab {
         Tab::Overview => overview(s),
         Tab::Models => models(s),
     }
+    term::emit(&SCREEN.with(|b| std::mem::take(&mut *b.borrow_mut())));
 }
 
 fn header(s: &Stats, name: &str) {
@@ -54,7 +82,7 @@ fn header(s: &Stats, name: &str) {
         .join(&format!("{DIM} · {RESET}"));
     // título à esquerda, chips à direita (o pad usa a largura VISÍVEL do título).
     let pad = 62usize.saturating_sub(title.chars().count());
-    println!("{BOLD}{title}{RESET}{}{chips}", " ".repeat(pad.max(2)));
+    outln!("{BOLD}{title}{RESET}{}{chips}", " ".repeat(pad.max(2)));
 }
 
 fn tabs(active: Tab) {
@@ -65,7 +93,7 @@ fn tabs(active: Tab) {
             format!("{GRAY}{label}{RESET}")
         }
     };
-    println!(
+    outln!(
         " {}    {}",
         one("Visão Geral", active == Tab::Overview),
         one("Modelos", active == Tab::Models),
@@ -86,15 +114,15 @@ fn overview(s: &Stats) {
         .unwrap_or_else(|| "—".into());
     let model = s.favorite_model.clone().unwrap_or_else(|| "—".into());
 
-    println!("{}", border('┌', '┬', '┐'));
-    println!(
+    outln!("{}", border('┌', '┬', '┐'));
+    outln!(
         "{}",
         grid_row(
             ["Sessões", "Mensagens", "Total de tokens", "Dias ativos"],
             GRAY
         )
     );
-    println!(
+    outln!(
         "{}",
         grid_row(
             [
@@ -106,15 +134,15 @@ fn overview(s: &Stats) {
             CYAN,
         )
     );
-    println!("{}", border('├', '┼', '┤'));
-    println!(
+    outln!("{}", border('├', '┼', '┤'));
+    outln!(
         "{}",
         grid_row(
             ["Seq. atual", "Maior seq.", "Horário de pico", "Modelo favorito"],
             GRAY
         )
     );
-    println!(
+    outln!(
         "{}",
         grid_row(
             [
@@ -126,23 +154,23 @@ fn overview(s: &Stats) {
             CYAN,
         )
     );
-    println!("{}", border('└', '┴', '┘'));
+    outln!("{}", border('└', '┴', '┘'));
 
-    println!();
+    outln!();
     heatmap(s);
 
     if let Some(phrase) = stats::moby_phrase(s.tokens) {
-        println!();
-        println!("{DIM}{phrase}{RESET}");
+        outln!();
+        outln!("{DIM}{phrase}{RESET}");
     } else if !s.tokens_known && s.sessions > 0 {
-        println!();
-        println!("{DIM}(tokens passam a contar a partir das próximas sessões){RESET}");
+        outln!();
+        outln!("{DIM}(tokens passam a contar a partir das próximas sessões){RESET}");
     }
     if s.cost > 0.0 {
-        println!("{DIM}custo total ≈ US$ {:.2}{RESET}", s.cost);
+        outln!("{DIM}custo total ≈ US$ {:.2}{RESET}", s.cost);
     }
     if s.sessions == 0 {
-        println!("{GRAY}(sem sessões ainda — converse com a Anna e volte aqui){RESET}");
+        outln!("{GRAY}(sem sessões ainda — converse com a Anna e volte aqui){RESET}");
     }
 }
 
@@ -173,33 +201,33 @@ fn heatmap(s: &Stats) {
     let shown = &hm.weeks[start..];
     let labels = ["seg", "   ", "qua", "   ", "sex", "   ", "   "];
     for (row, label) in labels.iter().enumerate() {
-        print!("{GRAY}{label}{RESET} ");
+        out!("{GRAY}{label}{RESET} ");
         for col in shown {
             match col[row] {
-                None => print!("  "),
+                None => out!("  "),
                 Some(cnt) => {
                     let lv = stats::level(cnt, hm.max);
-                    print!("\x1b[48;5;{}m  {RESET}", palette(lv));
+                    out!("\x1b[48;5;{}m  {RESET}", palette(lv));
                 }
             }
         }
-        println!();
+        outln!();
     }
     // Legenda.
     let scale: String = (0..=4)
         .map(|l| format!("\x1b[48;5;{}m  {RESET}", palette(l)))
         .collect();
-    println!("{DIM}    menos {RESET}{scale}{DIM} mais{RESET}");
+    outln!("{DIM}    menos {RESET}{scale}{DIM} mais{RESET}");
 }
 
 // ── Aba Modelos ─────────────────────────────────────────────────────────────
 
 fn models(s: &Stats) {
     if s.models.is_empty() {
-        println!("{GRAY}(sem dados de modelo neste período){RESET}");
+        outln!("{GRAY}(sem dados de modelo neste período){RESET}");
         return;
     }
-    println!(
+    outln!(
         "{GRAY}{:<22}{:>9}{:>11}{:>10}{:>12}{RESET}",
         "Modelo", "Sessões", "Mensagens", "Tokens", "Custo"
     );
@@ -214,7 +242,7 @@ fn models(s: &Stats) {
         } else {
             "—".into()
         };
-        println!(
+        outln!(
             "{CYAN}{:<22}{RESET}{:>9}{:>11}{:>10}{:>12}",
             trunc(&r.model, 21),
             stats::fmt_int(r.sessions as i64),
@@ -224,8 +252,8 @@ fn models(s: &Stats) {
         );
     }
     if !s.model_known {
-        println!();
-        println!("{DIM}(o modelo passa a ser registrado a partir das próximas sessões){RESET}");
+        outln!();
+        outln!("{DIM}(o modelo passa a ser registrado a partir das próximas sessões){RESET}");
     }
 }
 

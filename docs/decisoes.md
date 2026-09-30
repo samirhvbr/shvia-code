@@ -124,3 +124,39 @@ Formato ADR. Não relitigar direção já decidida dentro de um how-to — linka
   decorador em `runner`, e `agent::run_turn` passa a devolver o texto final do
   turno (o REPL descarta; as fases que produzem artefato precisam). Nada muda no
   caminho normal da Anna. Escopo do v0 e o que falta: [orquestrador.md](orquestrador.md).
+
+---
+
+## ADR-004 — The terminal's look: restyle the output, keep `rustyline`, one module owns the escape codes
+
+- **Data:** 30/09/2026 · **Status:** Aceito (em entrega: 0.12.3 a 0.12.6)
+- **Context:** the owner asked for `anna` to look more like Claude Code or Codex, "the look
+  first, features later". What was there: ANSI escape codes written by hand in four modules
+  (`ui.rs`, `render.rs`, `diff.rs`, `stats_term.rs`), no test for a terminal, no `NO_COLOR`, no
+  width, no progress while the model works, tool calls shown as raw JSON, approvals answered by
+  typing a letter and Enter. Colour leaked into pipes: `anna -p ... | tee log` carried the codes.
+- **Decision 1 — Claude Code is the reference.** Owner's answer on 30/09/2026, among Claude
+  Code, Codex and a hybrid. The vocabulary of the product already matched (`tools`, diff plus
+  confirmation), and the README's promise is "the Claude Code experience". Concretely: a
+  welcome box, `●` for an action, `⎿` for its result, a spinner with elapsed time, diffs with
+  line numbers and a coloured background, approvals as a list picked with the arrow keys.
+- **Decision 2 — restyle what `anna` prints; do not build a full-screen interface.** The output
+  stays in the terminal's own scrollback (no alternate screen), so copying and scrolling keep
+  working, and the prompt stays `rustyline`. `ratatui` is **not** adopted now: a composer of its
+  own (input box, `/command` autocomplete, fixed status bar) would replace `rustyline` and have
+  to coexist with streaming and with the approval gates, for a gain the owner can judge only
+  after seeing the rest. It is stage 5 and is reopened by a new ADR if the restyle is not enough.
+- **Decision 3 — `term.rs` is the only place that writes an escape code.** It decides once
+  what the terminal supports: colour is written only when stdout is a terminal and `TERM` is not
+  `dumb`, `FORCE_COLOR` forces it, `NO_COLOR` (no-color.org) wins over both. The decision is a
+  pure function of the environment, tested without a terminal. Everything else asks `term`.
+- **Decision 4 — `-p` and `--json` do not change shape.** Without colour the output is the same
+  words with no escape codes. The `--json` host (SHVIA-DESKTOP, SShvTerm) talks through
+  `JsonSink`, a different `Frontend`, which this work does not touch.
+- **Dependencies.** `crossterm` (already planned in `arquitetura-cli.md` §3: width, raw mode and
+  keys for the approval menu) and `unicode-width` (already in the tree through `rustyline`: the
+  visible width of a line, for boxes, tables and the diff background). Each enters in the
+  version that uses it, and `cargo audit` gates each one.
+- **Consequences:** four deliveries, one subject each — the base (0.12.3), the turn's output
+  (0.12.4), diff and approval (0.12.5), markdown (0.12.6). The ruler `arvore_da_doc_bate_com_src`
+  requires every new `src/*.rs` to be in `arquitetura-cli.md` §2.

@@ -7,15 +7,9 @@ use crate::frontend::Frontend;
 use crate::gate::{self, Policy, Preview};
 use crate::render;
 use crate::telemetry::Telemetry;
+use crate::term;
 use crate::types::{Event, ToolCall};
 use std::collections::HashSet;
-
-const CYAN: &str = "\x1b[1;36m";
-const GREEN: &str = "\x1b[92m";
-const GRAY: &str = "\x1b[90m";
-const RED: &str = "\x1b[91m";
-const YELLOW: &str = "\x1b[93m";
-const RESET: &str = "\x1b[0m";
 
 #[derive(Default)]
 pub struct Ui {
@@ -44,11 +38,11 @@ impl Ui {
     }
 
     pub fn banner(&self, text: &str) {
-        println!("{CYAN}{text}{RESET}");
+        println!("{}", term::accent(text));
     }
 
     pub fn note(&self, text: &str) {
-        println!("{GRAY}{text}{RESET}");
+        println!("{}", term::gray(text));
     }
 
     fn flush_pending(&mut self) {
@@ -60,12 +54,12 @@ impl Ui {
 
     fn print_line(&mut self, line: &str) {
         if !self.label_shown {
-            println!("{GREEN}ANNA{RESET}");
+            println!("{}", term::green("ANNA"));
             self.label_shown = true;
         }
         if line.trim_start().starts_with("```") {
             self.in_code = !self.in_code;
-            println!("{GRAY}  ┄┄┄{RESET}");
+            println!("{}", term::gray("  ┄┄┄"));
             return;
         }
         println!("{}", render::style_line(line, self.in_code));
@@ -73,7 +67,9 @@ impl Ui {
 
     fn render_preview(&self, preview: &Preview) {
         match preview {
-            Preview::Diff { path, old, new } => print!("{}", diff::unified(path, old, new, true)),
+            Preview::Diff { path, old, new } => {
+                print!("{}", diff::unified(path, old, new, term::caps().color))
+            }
             Preview::Command { command, why } => {
                 let suffix = if why.is_empty() { String::new() } else { format!("   # {why}") };
                 println!("  $ {command}{suffix}");
@@ -100,7 +96,7 @@ impl Frontend for Ui {
             }
             Event::ToolCall(c) => {
                 self.flush_pending();
-                println!("{GRAY}  ⚙ {}({}){RESET}", c.name, compact_args(c));
+                println!("{}", term::gray(&format!("  ⚙ {}({})", c.name, compact_args(c))));
             }
             Event::ReasoningDelta | Event::Model { .. } | Event::Usage(_) | Event::Error(_)
             | Event::Done { .. } | Event::Other => {}
@@ -115,25 +111,25 @@ impl Frontend for Ui {
 
     fn tool_result(&mut self, call: &ToolCall, out: &str) {
         let first = out.lines().next().unwrap_or("");
-        let mark = if out.starts_with("ERRO") || out.starts_with("RECUSADO") { RED } else { GRAY };
-        println!(
-            "{mark}  ✓ {} → {} bytes{RESET}  {GRAY}{}{RESET}",
-            call.name,
-            out.len(),
-            truncate(first, 72)
-        );
+        let head = format!("  ✓ {} → {} bytes", call.name, out.len());
+        let head = if out.starts_with("ERRO") || out.starts_with("RECUSADO") {
+            term::red(&head)
+        } else {
+            term::gray(&head)
+        };
+        println!("{head}  {}", term::gray(&truncate(first, 72)));
     }
 
     fn turn_end(&mut self, tel: &Telemetry) {
-        println!("{GRAY}{}{RESET}", tel.footer());
+        println!("{}", term::gray(&tel.footer()));
     }
 
     fn error(&mut self, msg: &str) {
-        println!("{RED}erro: {msg}{RESET}");
+        println!("{}", term::red(&format!("erro: {msg}")));
     }
 
     fn warn(&mut self, msg: &str) {
-        println!("{YELLOW}{msg}{RESET}");
+        println!("{}", term::yellow(msg));
     }
 
     fn aviso_teto(&mut self, teto: usize) {

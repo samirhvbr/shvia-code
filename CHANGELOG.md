@@ -3,6 +3,23 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.12.3 - the terminal decides once whether it can take colour, and a pipe gets none
+
+First delivery of the visual work (ADR-004): the base the next three stand on. No look changes
+yet, only where the escape codes come from.
+
+- **`src/term.rs`** is now the only module that writes an ANSI code. Colour is written when stdout
+  is a terminal and `TERM` is not `dumb`; `FORCE_COLOR=1` forces it (a pipe included), and
+  `NO_COLOR` (no-color.org) wins over both. The decision is a pure function of the environment,
+  covered by tests that need no terminal.
+- **A pipe stops carrying escape codes.** `anna -p "..." | tee log` used to fill the log with
+  `ESC[92mANNA` and `ESC[90m...`; it now carries the same words and nothing else. The same goes
+  for `anna stats`, which composes the whole screen and lets `term::emit` strip the codes on the
+  way out.
+- `ui.rs`, `render.rs`, `diff.rs` and `stats_term.rs` lost their hand-written colour constants.
+  The REPL prompt goes through `term` too.
+- `--json` is untouched: `JsonSink` never printed colour.
+
 ## 0.12.2 - the roadmap gains the C5 item to list usable infras and their favorite models
 
 Documentation only. `docs/arquitetura-cli.md` §7 now carries a C5 item: `anna` should list the

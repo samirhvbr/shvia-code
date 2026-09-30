@@ -168,6 +168,24 @@ Wrappers de `git status --porcelain` / `git diff [--staged]`. Resultado = a saí
 Mostra o `git diff --staged` + a mensagem, confirma, commita. **`git push` NUNCA
 é implícito** — só via `bash` explícito (e cai no gate destrutivo).
 
+### `todo_write` · gate: auto (0.13.0)
+```json
+{"name":"todo_write","description":"Mantém a lista de tarefas deste trabalho (a lista INTEIRA a cada chamada)...",
+ "parameters":{"type":"object","required":["todos"],
+   "properties":{"todos":{"type":"array","items":{"type":"object","required":["content","status"],
+     "properties":{"content":{"type":"string"},"status":{"enum":["pending","in_progress","completed"]},
+       "activeForm":{"type":"string"}}}}}}}
+```
+The agent's own task list, the one ShvIA's Code mode shows in its **Tasks** tab
+(SHVIA-WEB `docs/FRONTEND/ABA-TAREFAS.md`). The shape is Claude Code's `TodoWrite` on
+purpose: the screen reads both with one parser. The list reaches the screen through the
+`tool_call` event the stream already emits for every call; the tool itself only validates
+(at most 50 tasks, a `content` each, a known `status`) and answers one line —
+`Lista de tarefas atualizada: 1 de 3 concluídas. Em andamento: …` — warning when more
+than one task is `in_progress`. It writes nothing on disk, so the read-only (plan) runner
+offers it too. The system prompt asks for it on work with 3+ steps, and not on a simple
+request.
+
 ## 3. Formato do resultado (mensagem `role:"tool"`)
 
 Cada execução vira `{ role:"tool", tool_call_id:"<id>", content:"<string>" }`.

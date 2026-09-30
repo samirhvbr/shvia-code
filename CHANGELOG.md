@@ -3,6 +3,21 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.0 - the agent keeps a task list with todo_write, which ShvIA's Code mode shows in its Tasks tab
+
+The owner, 30/09/2026, after opencode's sidebar: the list the agent builds and ticks off while it
+works. ShvIA's Code mode gained a **Tasks** tab (SHVIA-WEB) that reads Claude Code's `TodoWrite`;
+the SHVIA engine had no such tool, so with it the tab stayed empty.
+
+- New tool `todo_write` (gate auto): `todos[{content, status: pending|in_progress|completed,
+  activeForm?}]`, the whole list each call — Claude's `TodoWrite` shape, so the screen parses both
+  alike. It validates (≤50 tasks, content, status) and answers a one-line summary, warning when
+  more than one task is in progress. The list reaches the screen through the `tool_call` event the
+  stream already emits.
+- It writes nothing on disk: the read-only (plan) runner offers it too.
+- The system prompt asks for it on work with 3 or more steps, and not on a simple request.
+- Doc: `docs/ferramentas.md`. Tests: 4 new (181 in all).
+
 ## 0.12.6 - the answer is rendered as markdown: nested lists, tables, quotes, links and highlighted code
 
 Fourth and last delivery of the restyle (ADR-004). `render.rs` was three regexes over one line;

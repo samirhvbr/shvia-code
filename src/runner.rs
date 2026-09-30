@@ -75,8 +75,9 @@ impl ToolRunner for HostRunner {
 /// pela mesma porta.
 pub struct SomenteLeitura(pub Box<dyn ToolRunner>);
 
+// `todo_write` writes nothing on disk: a plan turn keeps its task list too (0.13.0).
 const LEITURA: &[&str] =
-    &["read_file", "list_dir", "grep", "glob", "git_status", "git_diff"];
+    &["read_file", "list_dir", "grep", "glob", "git_status", "git_diff", "todo_write"];
 
 impl ToolRunner for SomenteLeitura {
     fn run(&mut self, call: &ToolCall, root: &Path, fe: &mut dyn Frontend) -> String {
@@ -109,6 +110,7 @@ mod tests {
         let ro = SomenteLeitura(Box::new(LocalRunner));
         let nomes: Vec<String> = ro.tool_defs().into_iter().map(|d| d.name).collect();
         assert!(nomes.contains(&"read_file".to_string()));
+        assert!(nomes.contains(&"todo_write".to_string()), "a plan turn keeps its task list: it writes nothing on disk");
         for proibida in ["edit_file", "write_file", "bash", "git_commit"] {
             assert!(!nomes.contains(&proibida.to_string()), "{proibida} não devia ser oferecida");
         }

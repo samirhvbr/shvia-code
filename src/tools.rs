@@ -101,7 +101,57 @@ pub fn defs() -> Vec<ToolDef> {
                 "message": {"type":"string","description":"Mensagem do commit."},
                 "add_all": {"type":"boolean","description":"git add -A antes (default false)."}
             }), json!(["message"])),
+        // The task list the dev sees in the Tasks tab of ShvIA's Code mode (0.13.0). Same shape as
+        // Claude Code's TodoWrite on purpose: the screen reads both with one parser. It writes
+        // nothing on disk, so it is also offered in the read-only (plan) runner.
+        def("todo_write", "Mantém a lista de tarefas deste trabalho (a lista INTEIRA a cada chamada). Use em trabalho com 3+ etapas; uma tarefa in_progress por vez; marque completed assim que terminar.",
+            json!({
+                "todos": {"type":"array","description":"A lista completa, na ordem.","items": {
+                    "type":"object",
+                    "properties": {
+                        "content": {"type":"string","description":"A tarefa, no imperativo (ex.: 'Corrigir a query')."},
+                        "status": {"type":"string","enum":["pending","in_progress","completed"]},
+                        "activeForm": {"type":"string","description":"Como aparece enquanto está em andamento (ex.: 'Corrigindo a query')."}
+                    },
+                    "required": ["content","status"]
+                }}
+            }), json!(["todos"])),
     ]
+}
+
+/// Tasks a single `todo_write` accepts. A list longer than this is a plan, not a checklist.
+const MAX_TAREFAS: usize = 50;
+
+/// `todo_write`: validates the list and answers with a one-line summary. The LIST itself reaches
+/// the screen through the `tool_call` event the stream already emits for every call; this answer
+/// is what the model reads back, so it says what it has to do next when something is off.
+fn todo_write(args: &serde_json::Value) -> String {
+    let Some(itens) = args.get("todos").and_then(|v| v.as_array()) else {
+        return "ERRO: `todos` tem de ser a lista inteira de tarefas.".into();
+    };
+    if itens.len() > MAX_TAREFAS {
+        return format!("ERRO: {} tarefas é demais para uma lista; agrupe em no máximo {MAX_TAREFAS}.", itens.len());
+    }
+    let (mut feitas, mut em_andamento) = (0usize, Vec::new());
+    for (i, t) in itens.iter().enumerate() {
+        let content = t.get("content").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if content.is_empty() {
+            return format!("ERRO: a tarefa {} está sem `content`.", i + 1);
+        }
+        match t.get("status").and_then(|v| v.as_str()).unwrap_or("") {
+            "completed" => feitas += 1,
+            "in_progress" => em_andamento.push(content.to_string()),
+            "pending" => {}
+            outro => return format!("ERRO: status '{outro}' na tarefa {}; use pending, in_progress ou completed.", i + 1),
+        }
+    }
+    let mut out = format!("Lista de tarefas atualizada: {feitas} de {} concluídas.", itens.len());
+    match em_andamento.len() {
+        0 => {}
+        1 => out.push_str(&format!(" Em andamento: {}.", em_andamento[0])),
+        n => out.push_str(&format!(" Atenção: {n} tarefas marcadas in_progress; mantenha uma por vez.")),
+    }
+    out
 }
 
 /// Ferramentas do modo host (`--tools host`): só o shell. O `anna` PROPÕE um
@@ -135,6 +185,7 @@ pub fn run(call: &ToolCall, root: &Path, fe: &mut dyn Frontend) -> String {
             run_git(root, &args)
         }
         "git_commit" => git_commit(root, &s("message"), b("add_all"), &call.id, fe),
+        "todo_write" => todo_write(a),
         other => format!("ERRO: ferramenta desconhecida '{other}'."),
     }
 }
@@ -1187,6 +1238,36 @@ fn git_commit(root: &Path, message: &str, add_all: bool, id: &str, fe: &mut dyn 
 
 #[cfg(test)]
 mod tests {
+    // ── todo_write (0.13.0): the task list ShvIA's Tasks tab shows ───────────────────────────
+
+    #[test]
+    fn todo_write_is_offered_and_answers_with_a_summary() {
+        assert!(defs().iter().any(|d| d.name == "todo_write"), "the model has to be offered the tool");
+        let r = todo_write(&serde_json::json!({"todos": [
+            {"content": "Map the module", "status": "completed"},
+            {"content": "Fix the queries", "status": "in_progress", "activeForm": "Fixing the queries"},
+            {"content": "Write the report", "status": "pending"}
+        ]}));
+        assert_eq!(r, "Lista de tarefas atualizada: 1 de 3 concluídas. Em andamento: Fix the queries.");
+    }
+
+    #[test]
+    fn todo_write_refuses_what_the_screen_could_not_show() {
+        assert!(todo_write(&serde_json::json!({})).starts_with("ERRO"), "no list");
+        assert!(todo_write(&serde_json::json!({"todos": [{"content": "", "status": "pending"}]})).starts_with("ERRO"));
+        assert!(todo_write(&serde_json::json!({"todos": [{"content": "x", "status": "doing"}]})).contains("doing"));
+        let muitas: Vec<_> = (0..51).map(|i| serde_json::json!({"content": format!("t{i}"), "status": "pending"})).collect();
+        assert!(todo_write(&serde_json::json!({"todos": muitas})).starts_with("ERRO"));
+    }
+
+    #[test]
+    fn todo_write_warns_when_more_than_one_task_is_in_progress() {
+        let r = todo_write(&serde_json::json!({"todos": [
+            {"content": "a", "status": "in_progress"}, {"content": "b", "status": "in_progress"}
+        ]}));
+        assert!(r.contains("uma por vez"), "{r}");
+    }
+
 
     // ── F-04: teto de tempo do bash ─────────────────────────────────────────
 

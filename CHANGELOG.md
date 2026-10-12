@@ -3,6 +3,13 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.2 - every Release carries a static Linux binary, the one the ShvIA Workspace installs
+
+**Master builds again.** 0.13.1 bumped `version.md` and left `Cargo.toml` and `Cargo.lock`
+at 0.13.0, so `build.rs` refused to compile master — and the tag `0.13.1` with it (measured on
+12/10/2026, building the tag for the Workspace). The three carriers move to 0.13.2 together.
+The code is 0.13.0's; 0.13.1 changed only the echo blocks.
+
 ## 0.13.1 - the echo blocks are regenerated from repodocs
 
 The marked rules in `CLAUDE.md` and `AGENTS.md` are rewritten from the single

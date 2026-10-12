@@ -1,0 +1,95 @@
+# Builds anna as a static Linux binary (x86_64, musl) and attaches it to the Release of
+# the version in version.md, with its SHA-256 next to it.
+#
+# Why it exists: the ShvIA Workspace runs anna inside each project's runner container
+# (SHVIA-WORKSPACE 0.33.0, `services/host-agent/src/motor.ts`), and neither the VM nor the
+# runner image has a Rust toolchain. A static musl binary runs on the runner's Debian image
+# and on any other. Until 0.13.2 no Release carried a binary: the desktop builds anna from
+# source when it packages itself (SHVIA-DESKTOP `stage-anna.mjs`), so nobody needed one.
+#
+# Why not inside release.yml: that file is the fleet's standard Release job, the same in
+# every repository; a build only this repository needs lives next to it.
+#
+# Why it waits for the Release instead of reacting to it: release.yml creates the Release
+# on this same push with GITHUB_TOKEN, and an event made with GITHUB_TOKEN starts no other
+# workflow — `on: release` would never fire here. So this job builds, then waits for the
+# Release to exist, then uploads.
+#
+# Why Docker and a pinned image: the job runs on the self-hosted runner, where installing
+# musl-tools with apt would change the host for every other repository. The Rust image is
+# pinned by digest so a rebuild of the same tag produces the same toolchain.
+#
+# `uses:` are pinned by commit SHA (finding F-09); the ruler
+# toda_action_do_ci_esta_pinada_por_sha in src/main.rs checks it.
+
+name: linux-binary
+
+on:
+  push:
+    branches: [master]
+    paths: ["version.md"]     # only a version bump produces a Release to attach to
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag to build and attach to (an existing Release); empty = this commit's version.md"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-binary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}   # self-hosted cicd when CI_RUNNER is set (SHVIA-WEB deploy/servidor-cicd.md)
+    permissions:
+      contents: write          # uploading a Release asset needs it
+    env:
+      ASSET: anna-x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.version || github.sha }}
+
+      # The source is mounted read-only and the target lives inside the container, so the
+      # build writes nothing into the checkout; only the finished binary comes out.
+      - name: Build the static binary
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/anna-build"
+          mkdir -p "$OUT"
+          docker run --rm \
+            -v "$PWD":/src:ro -v "$OUT":/out -w /src -e CARGO_TARGET_DIR=/tmp/target \
+            rust:1.99.0-alpine@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 \
+            sh -c 'apk add --no-cache musl-dev >/dev/null && cargo build --release --locked && cp /tmp/target/release/anna /out/anna'
+          # The container wrote as root; a copy made here belongs to the runner.
+          cp "$OUT/anna" "$RUNNER_TEMP/$ASSET"
+          chmod 755 "$RUNNER_TEMP/$ASSET"
+
+      # A binary that is not static, or that reports another version, must not be attached:
+      # the Workspace installs whatever this Release carries.
+      - name: Check the binary
+        run: |
+          set -euo pipefail
+          V="$(tr -d '[:space:]' < version.md)"
+          file "$RUNNER_TEMP/$ASSET" | tee /dev/stderr | grep -q 'static'
+          got="$("$RUNNER_TEMP/$ASSET" --version)"
+          [ "$got" = "anna $V" ] || { echo "::error::the binary says '$got', version.md says $V"; exit 1; }
+          cd "$RUNNER_TEMP" && sha256sum "$ASSET" > "$ASSET.sha256" && cat "$ASSET.sha256"
+
+      - name: Attach to the Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="$(tr -d '[:space:]' < version.md)"
+          # release.yml creates the Release on the same push; give it up to ten minutes.
+          for i in $(seq 1 60); do
+            if gh release view "$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then break; fi
+            if [ "$i" = 60 ]; then echo "::error::Release $V did not appear in ten minutes"; exit 1; fi
+            sleep 10
+          done
+          gh release upload "$V" "$RUNNER_TEMP/$ASSET" "$RUNNER_TEMP/$ASSET.sha256" --repo "$GITHUB_REPOSITORY" --clobber

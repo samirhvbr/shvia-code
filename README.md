@@ -37,6 +37,16 @@ ele lê do stdin, e assim a chave não fica no histórico do shell). Se o arquiv
 chave e permissão frouxa, o `anna` avisa ao carregar. `anna config` mostra o estado
 resolvido.
 
+**Linux binary, no toolchain.** Since 0.13.2 every Release carries
+`anna-x86_64-unknown-linux-musl`, a static binary built by
+`.github/workflows/linux-binary.yml`, and its `.sha256`. It is what the ShvIA
+Workspace installs to run the engine in a project's runner container; it runs on any
+x86_64 Linux. Check it before running it:
+
+```bash
+sha256sum -c anna-x86_64-unknown-linux-musl.sha256
+```
+
 ## Usar
 
 ```bash

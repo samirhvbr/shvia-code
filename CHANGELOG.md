@@ -3,6 +3,23 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.2 - every Release carries a static Linux binary, the one the ShvIA Workspace installs
+
+**Master builds again.** 0.13.1 bumped `version.md` and left `Cargo.toml` and `Cargo.lock`
+at 0.13.0, so `build.rs` refused to compile master — and the tag `0.13.1` with it (measured on
+12/10/2026, building the tag for the Workspace). The three carriers move to 0.13.2 together.
+The code is 0.13.0's; 0.13.1 changed only the echo blocks.
+
+**A static Linux binary on every Release.** The new workflow `linux-binary.yml` builds anna for
+`x86_64-unknown-linux-musl` on each push that bumps `version.md`, refuses a binary that is not
+static or whose `--version` is not `version.md`'s, and attaches `anna-x86_64-unknown-linux-musl`
+and its `.sha256` to that version's Release. The ShvIA Workspace runs the engine in each
+project's runner container (SHVIA-WORKSPACE 0.33.0), and neither the VM nor the runner image has
+a Rust toolchain; until now no Release carried a binary, because the desktop builds anna from
+source. The build runs in a Rust image pinned by digest, in Docker, so the self-hosted runner's
+host is left as it was. It waits for the Release instead of reacting to it: release.yml creates
+it with `GITHUB_TOKEN`, and an event made with that token starts no other workflow.
+
 ## 0.13.1 - the echo blocks are regenerated from repodocs
 
 The marked rules in `CLAUDE.md` and `AGENTS.md` are rewritten from the single

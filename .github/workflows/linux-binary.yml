@@ -10,10 +10,14 @@
 # Why not inside release.yml: that file is the fleet's standard Release job, the same in
 # every repository; a build only this repository needs lives next to it.
 #
-# Why it waits for the Release instead of reacting to it: release.yml creates the Release
-# on this same push with GITHUB_TOKEN, and an event made with GITHUB_TOKEN starts no other
-# workflow — `on: release` would never fire here. So this job builds, then waits for the
-# Release to exist, then uploads.
+# Why it runs after the Release workflow (0.13.3): release.yml creates the Release with
+# GITHUB_TOKEN, and an event made with GITHUB_TOKEN starts no other workflow, so `on: release`
+# never fires here. Until 0.13.3 this job ran on the same push, built, and then waited up to ten
+# minutes for the Release to exist. On the self-hosted runner, one per repository, that wait
+# held the only runner while the Release job sat queued behind it: the wait always ran out, and
+# 0.13.2 came out without its binary (measured on 12/10/2026). `workflow_run` fires when the
+# Release workflow completes — that run was started by the push, not by GITHUB_TOKEN, so the
+# event is delivered — and by then the Release exists; the runner is held only to build.
 #
 # Why Docker and a pinned image: the job runs on the self-hosted runner, where installing
 # musl-tools with apt would change the host for every other repository. The Rust image is
@@ -25,9 +29,10 @@
 name: linux-binary
 
 on:
-  push:
+  workflow_run:
+    workflows: [Release]      # release.yml runs only on a version bump, so this does too
+    types: [completed]
     branches: [master]
-    paths: ["version.md"]     # only a version bump produces a Release to attach to
   workflow_dispatch:
     inputs:
       version:
@@ -44,6 +49,8 @@ concurrency:
 
 jobs:
   build:
+    # A Release run that failed published nothing to attach to.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}   # self-hosted cicd when CI_RUNNER is set (SHVIA-WEB deploy/servidor-cicd.md)
     permissions:
       contents: write          # uploading a Release asset needs it
@@ -52,7 +59,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.version || github.sha }}
+          # The commit the Release was cut from; on a dispatch, the tag asked for.
+          ref: ${{ inputs.version || github.event.workflow_run.head_sha || github.sha }}
 
       # The source is mounted read-only and the target lives inside the container, so the
       # build writes nothing into the checkout; only the finished binary comes out.
@@ -86,10 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           V="$(tr -d '[:space:]' < version.md)"
-          # release.yml creates the Release on the same push; give it up to ten minutes.
-          for i in $(seq 1 60); do
-            if gh release view "$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then break; fi
-            if [ "$i" = 60 ]; then echo "::error::Release $V did not appear in ten minutes"; exit 1; fi
-            sleep 10
-          done
+          # The Release workflow has completed, so the Release exists unless it failed to publish.
+          gh release view "$V" --repo "$GITHUB_REPOSITORY" >/dev/null \
+            || { echo "::error::there is no Release $V to attach to — see the Release workflow's run"; exit 1; }
           gh release upload "$V" "$RUNNER_TEMP/$ASSET" "$RUNNER_TEMP/$ASSET.sha256" --repo "$GITHUB_REPOSITORY" --clobber

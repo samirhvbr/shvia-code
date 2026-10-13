@@ -3,6 +3,18 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.3 - the Linux binary is built after the Release, so it no longer waits on the runner it holds
+
+**0.13.2 came out without its binary.** `linux-binary.yml` ran on the same push as release.yml,
+built anna, and then waited up to ten minutes for the Release to exist. On the self-hosted
+runner — one per repository — that wait held the only runner while the Release job sat queued
+behind it, so the wait ran out every time (measured on 12/10/2026, the first push that ran it).
+The job now starts on `workflow_run`, when the Release workflow completes: the Release exists by
+then, and the runner is held only to build. That event is delivered even though release.yml
+publishes with `GITHUB_TOKEN`, because the Release run itself was started by the push. A Release
+run that failed is skipped; a dispatch with a tag still builds and attaches to that Release, which
+is how 0.13.2 got its binary.
+
 ## 0.13.2 - every Release carries a static Linux binary, the one the ShvIA Workspace installs
 
 **Master builds again.** 0.13.1 bumped `version.md` and left `Cargo.toml` and `Cargo.lock`

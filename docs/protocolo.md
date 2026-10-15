@@ -1,9 +1,11 @@
 # Protocolo do gateway — `POST /api/v1/code/chat`
 
-> Contrato **CLI ↔ servidor**. É a interface que o `anna` (Rust) implementa
-> contra o `CodeChatController` do SHVIA-WEB (2.16.0). Fonte da verdade do wire
-> format; o cliente segue **isto**, não o código do servidor. Mudança aqui =
-> versão do servidor + nota neste doc.
+> **Source review, 2026-10-15:** this describes the CLI request/SSE contract. Its
+> historical server version and limits below are not a current deployment attestation.
+> The client actually sends `X-API-Key`, `messages`, `tools`, optional `profile_name`
+> and `effort` (`src/api.rs`, `src/types.rs`). Other request alternatives are server
+> contract context, not CLI flags. Verify server limits/access/policy in ShvIA Web.
+> Conversation is resent for inference even when local session files remain local.
 
 ---
 

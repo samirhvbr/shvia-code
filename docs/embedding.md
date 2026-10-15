@@ -4,6 +4,12 @@ Como uma casca externa (a aba **Agente do SShvTerm**, uma extensão de editor, u
 job de CI) dirige o motor do `anna` sem falar ANSI. O mesmo loop que move o
 terminal move o host — via um `Frontend` que fala **NDJSON** (`src/json.rs`).
 
+> **Current lifecycle notes (2026-10-15):** JSON modes do not use REPL session autosave.
+> `--json -p` can still request write approval from stdin; terminal `-p` refusal is not
+> a restriction on this frontend. Pending gates/results have no application timeout.
+> Hosts must handle `error` and process closure: some error paths do not emit `turn_done`.
+> Model, usage and event fields below are the engine contract, not proof of a deployed host.
+
 ## Como subir
 
 ```bash
@@ -30,7 +36,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 |-------|--------|
 | `{"type":"user","text":"..."}` | inicia um turno (modo persistente) |
 | `{"type":"exit"}` | encerra o motor |
-| `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`** (o `id` correlaciona a proposta; o motor bloqueia por ordem, então o `id` é conferência) |
+| `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`** (hosts should correlate IDs; this engine currently consumes the next decision without enforcing its ID) |
 | `{"id":"…","decision":"continue"\|"stop","message":"…"}` | **answer to a `stop_request`** (engines that hold a turn open — see the handshake below; `anna` never asks) |
 
 ### `anna` → Host (stdout)
@@ -154,6 +160,8 @@ Quem roda as ferramentas:
 ## Segurança
 
 - Chave só via env (§ SECURITY 2.4); o host repassa no ambiente do filho.
-- O motor confina tudo à raiz do projeto (guard) e mantém a denylist de segredos.
+- Local filesystem tools use project path guards; an approved shell command runs with
+  account permissions, and filename denylist coverage is incomplete. See
+  [security](../SECURITY_GUIDELINES.md).
 - Em `--tools host`, o confinamento e a execução são do host — o `anna` só propõe;
   a política do host (allow/ask/deny) é que manda.

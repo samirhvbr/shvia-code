@@ -3,6 +3,17 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.5 - Document the current CLI and its execution boundaries
+
+- Replace the early-MVP README with the implemented terminal, NDJSON, host-runner,
+  planning, task-list, session, checkpoint, statistics and optional-memory surfaces.
+- Add a documentation index, command/configuration guide and development/distribution
+  guide; reconcile architecture, security, embedding and dated design records with source.
+- Correct the short agent context's obsolete direct-master and Portuguese-publication
+  instructions; preserve generated fleet rules and unimplemented queue plans.
+- Record source-inspection findings for a separate implementation decision. No Rust,
+  shell or workflow logic changes. Synchronize version carriers as required for docs.
+
 ## 0.13.4 - Take the patched rustls, rustls-webpki, tokio and webpki-roots, which turned `cargo deny` red
 
 `cargo deny check advisories` fails on `master` since RustSec published seven advisories against

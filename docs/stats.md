@@ -1,5 +1,11 @@
 # `anna stats` — dashboard de uso (Wrapped)
 
+> **Current scope (2026-10-15):** this dashboard reads retained REPL session data, not
+> every engine call. One-shot and NDJSON modes have no local session autosave, and
+> pipeline activity does not create an equivalent complete dashboard record. Message
+> history is compacted; per-session model metadata is not per-message accounting.
+> [User guide](USER-GUIDE.md) · [open fidelity findings](DOCUMENTATION-REVIEW-20261015.md).
+
 A tela **"O que vem a seguir, &lt;você&gt;?"**: um resumo do seu uso do `anna`,
 no estilo _wrapped_. Roda **100% local** — lê só as sessões em
 `~/.shvia-code/sessions/`, não fala com o gateway.

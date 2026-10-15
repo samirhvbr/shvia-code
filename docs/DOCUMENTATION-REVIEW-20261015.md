@@ -73,6 +73,15 @@ choosing an implementation.
 | Pipeline verification can skip checks or wait indefinitely | `src/orquestrador.rs::falha_verificacao` skips non-allowlisted/spawn-error commands and calls `Command::output`, outside the shell timeout executor | Test unavailable, disallowed and hanging configured checks; decide fail/skip semantics and timeout reuse |
 | NDJSON local approvals do not enforce request ID | `src/json.rs::approve` reads `decision` without comparing the returned `id`; pending stdin waits have no timeout | Test stale/out-of-order decisions and host shutdown; decide strict correlation/lifecycle compatibility |
 
+**Qualifications from independent review:** grep still respects its walker's default
+ignore/hidden rules, while glob returns names rather than file contents; those observations
+do not themselves establish a project-root escape. The key setter's temporary-file write
+precedes chmod and has no exclusive/no-follow creation, but session files sit in a parent
+directory already assigned `0700`; their atomicity/permission behavior must not be equated
+with the same exposure. For terminal `-p`, reported HTTP/SSE errors can return success,
+whereas transport errors propagate as Rust errors. JSON catches both categories; missing
+`turn_done` is an affected-path lifecycle risk, not proof that every host always hangs.
+
 Smaller source limitations already documented include missing branch labels in linked
 Git worktrees, permissive `--tools host` without JSON falling back to local mode, and the
 legacy checkpoint restore fallback affecting the index. Catalog commands, keychain,

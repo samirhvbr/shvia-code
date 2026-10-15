@@ -13,6 +13,8 @@ primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
   instructions; preserve generated fleet rules and unimplemented queue plans.
 - Record source-inspection findings for a separate implementation decision. No Rust,
   shell or workflow logic changes. Synchronize version carriers as required for docs.
+- Qualify the findings after independent review: ignore/hidden rules versus secret
+  filtering, the protected session directory, and transport versus HTTP/SSE failures.
 
 ## 0.13.4 - Take the patched rustls, rustls-webpki, tokio and webpki-roots, which turned `cargo deny` red
 

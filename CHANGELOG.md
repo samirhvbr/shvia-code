@@ -3,6 +3,29 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.4 - Take the patched rustls, rustls-webpki, tokio and webpki-roots, which turned `cargo deny` red
+
+`cargo deny check advisories` fails on `master` since RustSec published seven advisories against
+four crates locked in `Cargo.lock` (measured 23/10/2026, the same command the `test` workflow runs;
+the last green run was 13/10/2026, before the advisories existed, so the red is newer than the code):
+
+- `rustls` 0.23.45: RUSTSEC-2026-0346 (`Debug` impls expose TLS secrets), -0347 (data sent to the outer
+  server after ECH rejection), -0348 (Brotli certificate decompression can allocate 1 GiB before
+  authentication), -0349 (an unauthenticated ServerHello can downgrade later connections).
+- `rustls-webpki` 0.103.15: RUSTSEC-2026-0382 (distrusted intermediates may be accepted).
+- `webpki-roots` 1.0.8: RUSTSEC-2026-0381 (bundled roots trust distrusted emSign intermediates).
+- `tokio` 1.52.3: RUSTSEC-2026-0386 (`AsyncFd::new` violates I/O safety).
+
+`cargo update -p rustls -p rustls-webpki -p tokio -p webpki-roots` moves them to 0.23.46, 0.103.16,
+1.54.1 and 1.0.11, all semver-compatible; nothing else in `Cargo.lock` changes and `Cargo.toml` is
+untouched except for the version. `deny.toml` keeps its empty ignore list, which is the state it
+declares as intended: these are real flaws with a published fix, not exceptions.
+
+Also seen and left alone: `cargo deny check licenses` fails on `anna` itself ("unlicensed", the
+crate declares no license). The `test` workflow only runs `check advisories`, and the same crate
+in the desktop repository solves it with `[licenses.private] ignore = true`; that is a separate
+change.
+
 ## 0.13.3 - the Linux binary is built after the Release, so it no longer waits on the runner it holds
 
 **0.13.2 came out without its binary.** `linux-binary.yml` ran on the same push as release.yml,

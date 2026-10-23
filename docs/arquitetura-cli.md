@@ -136,10 +136,10 @@ async fn turn(state: &mut Session, ui: &dyn Ui, gate: &mut Gate) -> Result<()> {
         let resp = api::code_chat(&state.messages, tools::defs(), &cfg).await?;
         // resp já foi renderizada ao vivo pelo ui (text_delta) e coletou tool_calls/usage
         telemetry::add(resp.usage);
+        state.push_assistant(resp.text, &resp.tool_calls);
         if resp.tool_calls.is_empty() {
             return Ok(());                              // resposta final → fim do turno
         }
-        state.push_assistant(resp.text, &resp.tool_calls);
         for call in resp.tool_calls {
             let out = tools::run(&call, ui, gate).await; // executa LOCAL, com gate
             state.push_tool(call.id, out);               // role=tool
@@ -149,6 +149,15 @@ async fn turn(state: &mut Session, ui: &dyn Ui, gate: &mut Gate) -> Result<()> {
     Ok(())
 }
 ```
+
+Every successful response is appended to the conversation once, including the
+final response without tool calls. The next request therefore includes what the
+assistant already said. The terminal's existing autosave and resume paths retain
+that same history. The orchestrator's JSON-format retry adds its validation
+feedback after the answer already recorded by `run_turn`.
+`tests/assistant_history.rs` checks the persistent NDJSON process, terminal
+save/resume, and JSON-format retries against a local SSE fixture, with an isolated
+home directory on Unix; it does not call a live model.
 
 `tools::run` resolve nome→executor no registry, aplica o gate (auto/confirm/
 always), executa e devolve o `content` (sucesso/`ERRO:`/`RECUSADO:`).

@@ -325,7 +325,6 @@ async fn fase_json<T>(
         Err(e) => e,
     };
     ui.warn(&format!("({}: resposta fora do contrato — {erro}; tentando de novo)", papel.chave()));
-    msgs.push(Message::assistant(texto, vec![]));
     msgs.push(Message::user(format!(
         "Sua resposta não passou na validação: {erro}\n\nResponda AGORA só com o JSON válido, \
          sem cerca de código e sem texto em volta."

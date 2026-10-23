@@ -3,6 +3,21 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.5 - Preserve final assistant answers in conversation history
+
+The agent displayed final answers but only added assistant messages with tool calls
+to its history. A follow-up such as "use your previous answer" therefore reached
+the stateless gateway without that answer, in both the persistent NDJSON process
+and the terminal. Terminal autosave and resumed sessions also omitted those replies.
+
+Append each successful assistant response once before checking whether the turn
+has finished. Tool calls and their results keep their existing order. The
+orchestrator's JSON-format retry reuses that recorded answer instead of appending
+it again. Integration tests launch the real CLI against a local SSE fixture and
+verify the next NDJSON request, terminal autosave, a resumed request, and the
+orchestrator's retry. The tests isolate the home directory on Unix; no live model
+or Windows session-store behavior is covered.
+
 ## 0.13.4 - Take the patched rustls, rustls-webpki, tokio and webpki-roots, which turned `cargo deny` red
 
 `cargo deny check advisories` fails on `master` since RustSec published seven advisories against

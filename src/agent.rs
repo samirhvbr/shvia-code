@@ -132,6 +132,7 @@ pub async fn run_turn(
             return Ok(String::new());
         }
         ultimo_texto = result.text.clone();
+        messages.push(Message::assistant(result.text.clone(), result.tool_calls.clone()));
         if result.tool_calls.is_empty() {
             fe.turn_end(telemetry);
             return Ok(ultimo_texto);
@@ -139,7 +140,6 @@ pub async fn run_turn(
 
         // Modelo pediu ferramentas → o `runner` decide onde executam (local =
         // o anna; host = a casca externa) e devolve o resultado (role=tool).
-        messages.push(Message::assistant(result.text.clone(), result.tool_calls.clone()));
         for call in &result.tool_calls {
             let out = runner.run(call, &project.root, fe);
             memory::tool_use(&call.name, &call.arguments, &out);

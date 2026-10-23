@@ -114,7 +114,7 @@ data: {"kind":"<tipo>","data":{...}}
          { role:"assistant", content:<text>, tool_calls:[...] }
          { role:"tool", tool_call_id:<id>, content:<resultado> }  (um por call)
        → volta ao passo 2 com o histórico crescido
-     - sem tool_calls?  → é a resposta final; encerra o turno
+     - no tool_calls?   → append { role:"assistant", content:<text> } and end the turn
 5. teto de voltas por turno (SECURITY §2.7, default 100; `max_voltas` no
    config.toml ou env `SHVIA_MAX_VOLTAS`) — estoura: terminal interativo
    pergunta se continua mais um lote; host NDJSON persistente encerra o

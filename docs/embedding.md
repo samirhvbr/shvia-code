@@ -34,7 +34,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 
 | Linha | Quando |
 |-------|--------|
-| `{"type":"user","text":"..."}` | inicia um turno (modo persistente) |
+| `{"type":"user","text":"...","images":["BASE64"]}` | starts a persistent turn; `images` is optional, pure base64 without a data URL prefix |
 | `{"type":"exit"}` | encerra o motor |
 | `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`** (hosts should correlate IDs; this engine currently consumes the next decision without enforcing its ID) |
 | `{"id":"…","decision":"continue"\|"stop","message":"…"}` | **answer to a `stop_request`** (engines that hold a turn open — see the handshake below; `anna` never asks) |
@@ -48,7 +48,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | `tool_call` | `id`, `name`, `arguments` | a Anna vai usar uma ferramenta |
 | `tool_result` | `id`, `name`, `bytes`, `content` | resultado da ferramenta (já executada) |
 | `gate_request` | `id`, `scope`, `policy`, `preview` | **pede aprovação** — o motor BLOQUEIA até a decisão (`id` = o `tool_call.id`, casa com o `tool_result`) |
-| `usage` | `tokens`, `cost`, `estimated` | telemetria do turno |
+| `usage` | `tokens`, `cost`, `estimated` | cumulative telemetry since this process started, not a per-turn delta |
 | `turn_done` | — | turno terminou; pode mandar o próximo `user` |
 | `stop_request` | `id`, `iteration`, `last`, `reason` | **optional, per engine** — the model wants to end the turn and the engine asks the host whether to continue; **BLOCKS** until the answer. `anna` does not emit it |
 | `error` / `warn` | `message` | erro fatal do turno / aviso |
@@ -68,6 +68,14 @@ Auto do host aprovaria sozinho — loop sem humano.)
 - `{"kind":"diff","path":"src/x.rs","diff":"...unificado sem cor..."}`
 - `{"kind":"command","command":"cargo test","why":"..."}`
 - `{"kind":"commit","stat":"...","message":"..."}`
+
+The stdin stream is sequential. Normal completion emits `turn_done` before the next
+`user` turn; meanwhile, answer the current gate or host tool result. Current HTTP/SSE
+error paths can emit `error` without `turn_done`, so the host must also handle that
+terminal error and process exit instead of waiting indefinitely for completion.
+During gate/result waits the engine reads stdin itself and can consume/discard
+unrelated lines; it does not maintain a queue of future turns. JSON state lasts only
+as long as the process, and `anna sessions resume` does not restore it.
 
 ### O handshake de aprovação
 
@@ -144,9 +152,10 @@ Quem roda as ferramentas:
 
 - **`--tools local`** (default): o **próprio `anna`** executa. `bash` roda na
   máquina onde o `anna` está; a aprovação sai como `gate_request` (Modelo A).
-- **`--tools host`** (só faz sentido com `--json`): o `anna` **PROPÕE** — emite
-  `tool_call` e **não executa nem aprova**. O host roda com a política/PTY/SSH/
-  auditoria dele e injeta o resultado no stdin:
+- **`--tools host`** requires `--json` to select the host runner; otherwise execution
+  remains local. This runner offers only `bash`. It emits `tool_call` without executing
+  or approving it. The host applies its own policy/PTY/SSH/audit and returns the result
+  through stdin:
 
   ```
   anna → {"type":"tool_call","id":"c1","name":"bash","arguments":{"command":"ls"}}

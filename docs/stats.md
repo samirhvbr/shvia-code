@@ -41,7 +41,9 @@ No REPL: `/stats`, `/stats models`, `/stats 7d`, `/stats html`.
 Cada sessão passou a gravar, no autosave, três campos novos (retrocompatíveis,
 `#[serde(default)]` — ver [`session.rs`](../src/session.rs)):
 
-- `tokens` e `cost` — do acumulador de telemetria do turno;
+- `tokens` and `cost` — the in-memory telemetry accumulator at autosave time, not a
+  per-turn delta. The accumulator starts fresh in a resumed process; saved totals are
+  not loaded into it, as recorded in the [fidelity findings](DOCUMENTATION-REVIEW-20261015.md).
 - `model` — o `model` do evento SSE do gateway (cai pro perfil escolhido se o
   gateway não informar).
 

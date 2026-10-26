@@ -1,11 +1,13 @@
 # Protocolo do gateway — `POST /api/v1/code/chat`
 
-> **Source review, 2026-10-15:** this describes the CLI request/SSE contract. Its
-> historical server version and limits below are not a current deployment attestation.
-> The client actually sends `X-API-Key`, `messages`, `tools`, optional `profile_name`
-> and `effort` (`src/api.rs`, `src/types.rs`). Other request alternatives are server
-> contract context, not CLI flags. Verify server limits/access/policy in ShvIA Web.
-> Conversation is resent for inference even when local session files remain local.
+> **Source review, 2026-10-26:** this describes the CLI request/SSE contract,
+> checked against ShvIA Web `956c134f` (2.114.86). It is not a current deployment
+> attestation. Client serialization lives in [`types.rs`](../src/types.rs) and
+> [`api.rs`](../src/api.rs); server validation lives in
+> [CodeChatController](https://github.com/samirhvbr/shvia-web/blob/956c134f/app/Http/Controllers/Api/CodeChatController.php).
+> The client sends `X-API-Key`, `messages`, `tools`, optional `profile_name` and
+> `effort`. Other request alternatives below describe the wider gateway API,
+> not CLI flags. Conversation is resent for inference even when session files stay local.
 
 ---
 
@@ -18,8 +20,9 @@ Accept: text/event-stream
 X-API-Key: <chave do ShvIA>                # ou Authorization: Bearer <token>
 ```
 
-- **HTTPS obrigatório** (SECURITY §2.6). Rate limit = o mesmo do `agent/chat`
-  (`SHVIA_API_KEY_RATE_LIMIT`, default 20/min).
+- **HTTPS is required**, except HTTP on loopback for local development (SECURITY §2.6).
+  The rate limit uses `SHVIA_API_KEY_RATE_LIMIT`, default 20 requests/minute.
+- Scoped bearer tokens require the `code:chat` ability; the CLI sends its configured key using `X-API-Key`.
 - Resposta de sucesso: `200` + `text/event-stream` (SSE). Headers úteis:
   `X-Inference-Server`, `X-Inference-Model`, `X-Inference-Request-Id`.
 
@@ -30,27 +33,34 @@ X-API-Key: <chave do ShvIA>                # ou Authorization: Bearer <token>
   "messages": [                     // obrigatório, 1..200
     { "role": "system",    "content": "..." },
     { "role": "user",      "content": "...", "images": ["<base64 puro>"] },
-    { "role": "assistant", "content": "...", "tool_calls": [ {"id","name","arguments"} ] },
+    { "role": "assistant", "content": "...", "tool_calls": [{"id":"call_1","name":"read_file","arguments":{"path":"README.md"}}] },
     { "role": "tool",      "tool_call_id": "call_1", "content": "<resultado da ferramenta>" }
   ],
   "tools": [                        // opcional, 0..32 — defs no formato JSON Schema
-    { "name": "read_file", "description": "...", "parameters": { "type":"object", ... } }
+    { "name": "read_file", "description": "Read a file", "parameters": { "type":"object", "properties":{"path":{"type":"string"}}, "required":["path"] } }
   ],
   "tool_choice": "auto",            // opcional: auto|none|required|<nome-da-tool>
   "profile_name": "model@server",   // opcional — perfil explícito; senão o default do usuário
   "server": "shvia1",               // opcional (alternativa a profile_name)
   "model":  "qwen-coder",           // opcional
-  "effort": "medium"                // opcional: low|medium|high|xhigh|max
+  "effort": "medium",               // opcional: low|medium|high|xhigh|max
+  "temperature": 0.2                // optional gateway field: 0..2; not sent by anna
 }
 ```
 
-**Limites (recusa 422 acima):** `content` ≤ 200 000 chars; `images` ≤ 8/mensagem,
-≤ 8 MB de base64 **cada** e ≤ 24 MB **somados na requisição** (o total é o que bate
-no `post_max_size` do PHP-FPM, e estourá-lo faz o corpo chegar VAZIO ao Laravel);
-`tools` ≤ 32;
-`tool_calls` ≤ 32/mensagem; `arguments` = array OU string JSON (o driver tolera
-os dois). **STATELESS:** o servidor não guarda conversa — o **histórico inteiro
-vai a cada volta** (as sessões são locais no CLI, D7).
+**Validation limits:** `content` ≤ 200,000 characters; `images` ≤ 8 per message,
+≤ 8,000,000 base64 characters **each** and ≤ 24,000,000 **across the request**;
+`tools` ≤ 32 and `tool_calls` ≤ 32 per message. Tool arguments can be an object/array
+or a JSON string. The PHP-FPM `post_max_size` also limits the whole request body;
+exceeding it can leave Laravel with an empty body before these field rules apply.
+Validation failures return 422, with one exception: oversized `role:tool` content is
+trimmed, with an omission marker, before field validation. Non-tool content above the
+limit is refused.
+
+**Stateless conversation:** each request carries the retained history. The CLI compacts
+long history to a recent window around 150 messages before sending, preserving initial
+system context and avoiding orphan tool results. The server's 200-message limit and this
+client window form a shared contract; changing one requires checking the other.
 
 ### Imagem no turno do usuário (0.11.4+)
 

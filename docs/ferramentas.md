@@ -31,6 +31,9 @@ libera `bash`). **Não existe `--yolo` no v1.**
 Resultado: conteúdo (recortado se > teto, com `… [truncado em N bytes]`). Recusa
 paths na **denylist** (`.env*`, `*.pem/key/p8/p12/pfx`, `id_rsa*`, `*credentials*`,
 `~/.ssh`, `~/.aws`) → override só com confirmação do dev. Fora da raiz do projeto → recusa.
+Since 0.13.6 the denylist is also checked against the file's **real path, after every
+symlink**: `readme.txt -> .env` used to be read with no approval (external review,
+26/10/2026).
 
 ### `list_dir` · gate: auto
 ```json
@@ -50,6 +53,11 @@ oculta `.git/`.
      "glob":{"type":"string","description":"Filtro de arquivo, ex.: '*.php'."}}}}
 ```
 Resultado: `arquivo:linha: trecho` (teto de N hits; avisa se cortou). Respeita `.gitignore`.
+Since 0.13.6 it applies the same denylist as `read_file`: an explicit `path` on the list is
+refused, and files on it are skipped during the walk (by their real path), with one closing
+line saying how many were skipped. Until then `grep SECRET` returned the lines of a
+non-ignored `certs/server.pem`, and `path=".env"` bypassed `.gitignore` and the hidden-file
+filter (external review, 26/10/2026).
 
 ### `glob` · gate: auto
 ```json
@@ -78,6 +86,12 @@ o erro. Nunca escreve sem mostrar.
 ```
 Sobrescrever arquivo existente → diff contra o atual antes de confirmar. Novo →
 mostra o conteúdo. Recusa paths da denylist.
+Since 0.13.6 a name that already exists is resolved through its symlinks: the real file must
+stay inside the project and off the denylist, and the approval card names it
+(`notes.md → docs/notes-v2.md`). Until then only the parent folder was checked, so a link
+already in the tree (`notes.md -> ../outside.txt`, or `hook.txt -> .git/hooks/pre-commit`)
+took an approved write outside the project or into a git hook. `edit_file` applies the same
+check.
 
 ### `bash` · gate: **auto p/ allowlist · confirm p/ resto · always p/ destrutivo**
 ```json
@@ -105,9 +119,19 @@ mostra o conteúdo. Recusa paths da denylist.
   entre aspas, invisíveis ao scanner — mesmo critério que já mantinha o `sed` fora);
   `git branch` só é auto nas formas de leitura (`-D`/`-m` pedem cartão); `sort -o` e o
   segundo posicional do `uniq` são destino de escrita.
+- 🔴 **An unquoted glob in a command that prints file contents asks (since 0.13.6).** The
+  argument check reads tokens literally, and the shell expands globs after it: `cat .e*`,
+  `cat certs/*` and `head -n 50 .e*` were **auto** and printed `.env` and
+  `certs/server.pem` (external review, 26/10/2026). Now a non-flag word with `*`, `?`, `[`
+  or a `{a,b}` list outside quotes sends the segment to **confirm**. Flags
+  (`--include=*.rs`) and quoted patterns (`grep -n "fn .*x" src`) do not count, and
+  commands that only print names or metadata (`ls`, `wc`, `file`, `stat`, `du`, `tree`,
+  `git ls-files`…) stay auto. The price: `grep TODO src/*.rs` now asks; `grep -rn TODO src/`
+  does not.
 - **O que a guarda de argumento NÃO fecha, e está escrito para não ser confundido:** busca
   recursiva (`grep -r X .`) segue em auto e pode imprimir uma linha vinda de um `.env` do
-  projeto. Decidir por conteúdo é outra guarda, com outro custo.
+  projeto. Decidir por conteúdo é outra guarda, com outro custo. The `grep` **tool** does not
+  have this gap since 0.13.6 — it skips denied files — so it is the safe way to search.
 - **`npm run <script>`, `cargo build/test` e `make test` seguem em auto por DECISÃO:** eles
   executam o que o projeto declara (`package.json`, `Cargo.toml`, `Makefile`), e um prompt
   injetado não muda esses arquivos sem passar por `write_file`/`edit_file`, que têm cartão.
@@ -200,7 +224,10 @@ Convenções do `content`:
 
 - Todo resultado tem teto de bytes (default 64 KiB); acima, recorta com aviso —
   protege o contexto e o custo. `read_file` aceita `max_bytes`.
-- `.gitignore` respeitado em list/grep/glob; `.git/` oculto.
+- `.gitignore` respeitado em list/grep/glob; `.git/` oculto. Only inside a git repository:
+  the `ignore` crate reads `.gitignore` only where there is a `.git` (measured 26/10/2026), so
+  in a plain folder an ignored file is listed and searched. The denylist does not depend on
+  this.
 - Teto de voltas de tool por turno (default 100, `max_voltas`/`SHVIA_MAX_VOLTAS`)
   no loop (SECURITY §2.7) — estouro pergunta ao dev no terminal; no host encerra
   o turno com a sessão preservada ("continua" retoma).

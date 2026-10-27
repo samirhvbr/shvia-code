@@ -18,6 +18,11 @@ pub fn resolve(root: &Path, rel: &str) -> Option<PathBuf> {
 /// Como `resolve`, mas para um arquivo que PODE não existir ainda (write_file):
 /// exige que o **diretório-pai** exista e esteja dentro da raiz. `None` = pai
 /// inexistente ou fora do projeto.
+///
+/// A name that already exists may be a symlink, and a write follows it. Until 27/10/2026 only the
+/// parent was checked, so `notes.md -> ../outside.txt` passed and the approved write landed outside
+/// the project (external review, 26/10/2026). An existing name is now resolved through every link
+/// and must still land inside the root; a dangling link is refused, since there is nothing to check.
 pub fn resolve_new(root: &Path, rel: &str) -> Option<PathBuf> {
     let rel = rel.trim().trim_start_matches('/');
     let joined = root.join(rel);
@@ -25,7 +30,40 @@ pub fn resolve_new(root: &Path, rel: &str) -> Option<PathBuf> {
     let parent = joined.parent()?;
     let parent_c = parent.canonicalize().ok()?;
     let root_c = root.canonicalize().ok()?;
-    parent_c.starts_with(&root_c).then(|| parent_c.join(name))
+    if !parent_c.starts_with(&root_c) {
+        return None;
+    }
+    let alvo = parent_c.join(name);
+    if std::fs::symlink_metadata(&alvo).is_ok() {
+        let real = alvo.canonicalize().ok()?;
+        return real.starts_with(&root_c).then_some(real);
+    }
+    Some(alvo)
+}
+
+/// The file `full` really is, relative to the root, after every symlink — `None` when it is the
+/// same path that was asked for. The approval card shows it, so "Write(notes.md)" never hides
+/// which file is written.
+pub fn link_target(root: &Path, rel: &str, full: &Path) -> Option<String> {
+    let root_c = root.canonicalize().ok()?;
+    let pedido = root.join(rel.trim().trim_start_matches('/'));
+    let link = std::fs::symlink_metadata(&pedido).ok()?.file_type().is_symlink();
+    link.then(|| rel_real(&root_c, full))
+}
+
+/// Is the file `full` points to — after every symlink — on the denylist?
+///
+/// `denied` sees only the string the model asked for. Through a link inside the project that is
+/// not enough: `readme.txt -> .env` was read with no approval, and `hook.txt ->
+/// .git/hooks/pre-commit` was rewritten (external review, 26/10/2026). Every file tool checks both.
+pub fn denied_target(root: &Path, full: &Path) -> bool {
+    let root_c = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let real = full.canonicalize().unwrap_or_else(|_| full.to_path_buf());
+    denied(&rel_real(&root_c, &real))
+}
+
+fn rel_real(root_c: &Path, real: &Path) -> String {
+    real.strip_prefix(root_c).unwrap_or(real).to_string_lossy().replace('\\', "/")
 }
 
 /// Caminho na denylist de segredos? Vale mesmo com override — o override é

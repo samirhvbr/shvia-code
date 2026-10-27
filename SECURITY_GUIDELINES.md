@@ -36,6 +36,11 @@
    `id_rsa*`, `*credentials*`, `~/.ssh`, `~/.aws`, `.git/config` com URL
    credenciada — mesmo padrão do deny dos `.claude` da casa. Override só com
    confirmação explícita do dev na hora. (A2)
+   The list is checked against the requested path **and** the real file after every
+   symlink, by `read_file`, `grep`, `edit_file` and `write_file`. Until 0.13.6 the `grep`
+   tool did not apply it at all, and a symlink inside the project reached denied files
+   (external review, 26/10/2026). In `bash`, an unquoted glob in a content-printing command
+   asks, because the shell expands it after the argument check.
 4. **API key**: mora em `~/.config/shvia-code/config` com permissão **0600**
    (ou keychain do SO no futuro), **nunca** em arquivo do projeto, nunca em
    argumento de linha de comando (aparece no `ps`), **nunca** impressa em log

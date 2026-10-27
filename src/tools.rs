@@ -194,6 +194,15 @@ fn rel_of(root: &Path, p: &Path) -> String {
     p.strip_prefix(root).unwrap_or(p).to_string_lossy().replace('\\', "/")
 }
 
+/// The path the approval card names: the one asked for, plus the real file when it is a symlink
+/// (`notes.md → docs/notes-v2.md`). The person approves a file, not a name.
+fn mostrado(root: &Path, path: &str, full: &Path) -> String {
+    match guard::link_target(root, path, full) {
+        Some(real) => format!("{path} → {real}"),
+        None => path.to_string(),
+    }
+}
+
 // ── Leitura (C1) ────────────────────────────────────────────────────────────
 
 fn read_file(root: &Path, path: &str, max_bytes: usize) -> String {
@@ -203,6 +212,9 @@ fn read_file(root: &Path, path: &str, max_bytes: usize) -> String {
     let Some(full) = guard::resolve(root, path) else {
         return format!("ERRO: '{path}' inexistente ou fora do projeto.");
     };
+    if guard::denied_target(root, &full) {
+        return format!("RECUSADO: '{path}' aponta para um arquivo da denylist de segredos (SECURITY §2.3).");
+    }
     if !full.is_file() {
         return format!("ERRO: '{path}' não é um arquivo.");
     }
@@ -255,6 +267,14 @@ fn grep(root: &Path, pattern: &str, path: &str, glob: &str) -> String {
             Err(e) => return format!("ERRO: glob inválido: {e}"),
         }
     };
+    // The denylist applies to grep as it does to read_file (SECURITY_GUIDELINES §2.3 says so for
+    // both). Until 27/10/2026 it did not: `grep SECRET` returned the lines of a non-ignored
+    // `certs/server.pem`, and an explicit `path=".env"` bypassed both the hidden-file filter and
+    // .gitignore (external review, 26/10/2026). Each file is checked by its real path; the walk
+    // does not follow symlinks, and an explicit path is resolved through them.
+    if !path.is_empty() && guard::denied(path) {
+        return format!("RECUSADO: '{path}' está na denylist de segredos (SECURITY §2.3).");
+    }
     let base = if path.is_empty() {
         root.to_path_buf()
     } else {
@@ -263,7 +283,9 @@ fn grep(root: &Path, pattern: &str, path: &str, glob: &str) -> String {
             None => return format!("ERRO: '{path}' inexistente ou fora do projeto."),
         }
     };
+    let root_c = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut hits: Vec<String> = Vec::new();
+    let mut recusados = 0usize;
     'walk: for entry in WalkBuilder::new(&base).build().filter_map(Result::ok) {
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
@@ -274,16 +296,24 @@ fn grep(root: &Path, pattern: &str, path: &str, glob: &str) -> String {
                 continue;
             }
         }
+        let rel = if p.starts_with(&root_c) { rel_of(&root_c, p) } else { rel_of(root, p) };
+        if guard::denied(&rel) {
+            recusados += 1;
+            continue;
+        }
         let Ok(content) = std::fs::read_to_string(p) else { continue };
         for (i, line) in content.lines().enumerate() {
             if re.is_match(line) {
-                hits.push(format!("{}:{}: {}", rel_of(root, p), i + 1, line.trim()));
+                hits.push(format!("{rel}:{}: {}", i + 1, line.trim()));
                 if hits.len() >= MAX_HITS {
                     hits.push(format!("… [cortado em {MAX_HITS} resultados]"));
                     break 'walk;
                 }
             }
         }
+    }
+    if recusados > 0 {
+        hits.push(format!("… [{recusados} arquivo(s) da denylist de segredos não foram lidos]"));
     }
     if hits.is_empty() { "(nenhum resultado)".into() } else { hits.join("\n") }
 }
@@ -325,6 +355,9 @@ fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, i
     let Some(full) = guard::resolve(root, path) else {
         return format!("ERRO: '{path}' inexistente ou fora do projeto.");
     };
+    if guard::denied_target(root, &full) {
+        return format!("RECUSADO: '{path}' aponta para um arquivo da denylist de segredos (SECURITY §2.3).");
+    }
     let Ok(content) = std::fs::read_to_string(&full) else {
         return format!("ERRO: não consegui ler '{path}' como texto.");
     };
@@ -336,7 +369,8 @@ fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, i
         return format!("ERRO: old_string aparece {count}x — dê mais contexto pra ser único, ou use replace_all.");
     }
     let updated = if replace_all { content.replace(old, new) } else { content.replacen(old, new, 1) };
-    let preview = Preview::Diff { path, old: content.as_str(), new: updated.as_str() };
+    let shown = mostrado(root, path, &full);
+    let preview = Preview::Diff { path: &shown, old: content.as_str(), new: updated.as_str() };
     if !fe.approve(Policy::Confirm, "edit_file", id, &preview) {
         return "RECUSADO: edição cancelada pelo usuário.".into();
     }
@@ -352,8 +386,11 @@ fn write_file(root: &Path, path: &str, content: &str, id: &str, fe: &mut dyn Fro
         return format!("RECUSADO: '{path}' está na denylist de segredos (SECURITY §2.3).");
     }
     let Some(full) = guard::resolve_new(root, path) else {
-        return format!("ERRO: pasta-pai de '{path}' inexistente ou fora do projeto.");
+        return format!("ERRO: '{path}' aponta para fora do projeto, ou a pasta-pai não existe.");
     };
+    if guard::denied_target(root, &full) {
+        return format!("RECUSADO: '{path}' aponta para um arquivo da denylist de segredos (SECURITY §2.3).");
+    }
     let existed = full.exists();
     let old = std::fs::read_to_string(&full).unwrap_or_default();
     // "Sem mudanças" só vale se o arquivo JÁ existe com esse conteúdo. Sem o
@@ -363,7 +400,8 @@ fn write_file(root: &Path, path: &str, content: &str, id: &str, fe: &mut dyn Fro
     if existed && old == content {
         return format!("ok — '{path}' já tem esse conteúdo (sem mudanças).");
     }
-    let preview = Preview::Diff { path, old: old.as_str(), new: content };
+    let shown = mostrado(root, path, &full);
+    let preview = Preview::Diff { path: &shown, old: old.as_str(), new: content };
     if !fe.approve(Policy::Confirm, "write_file", id, &preview) {
         return "RECUSADO: escrita cancelada pelo usuário.".into();
     }
@@ -1151,6 +1189,79 @@ fn expansao_de_variavel(seg: &str) -> Option<String> {
     None
 }
 
+/// An argument the SHELL expands into file names (`*`, `?`, `[`, or a `{a,b}` brace list) outside
+/// quotes — so this gate never sees the files the command will open.
+///
+/// 🔴 Measured on 26/10/2026 (external review): `argumento_de_caminho_recusado` checks each token
+/// literally, and `cat .e*`, `cat certs/*` and `head -n 50 .e*` were `Policy::Auto` — the shell
+/// expanded them to `.env` and `certs/server.pem` after the check, and the contents went to the
+/// model with no card. Expanding the glob here would mean re-implementing the shell's rules (hidden
+/// files, `cd` earlier in the line, `nullglob`), and a partial copy would fail open; a card is the
+/// honest answer.
+///
+/// Flags are skipped (`--include=*.rs` is never expanded in practice), and so is a pattern inside
+/// quotes (`grep -n "fn .*x" src`), which is what the agent writes. The price: `grep TODO src/*.rs`
+/// now asks; `grep -rn TODO src/` does not.
+fn glob_sem_aspas(seg: &str) -> Option<String> {
+    let mut aspa: Option<char> = None;
+    let mut palavra = String::new();
+    let mut glob = false;
+    let mut chave = false;
+    let mut primeira = true;
+    let fecha = |palavra: &mut String, glob: &mut bool, chave: &mut bool, primeira: &mut bool| {
+        let achou = !*primeira && (*glob || (*chave && palavra.contains(','))) && !palavra.starts_with('-');
+        let out = achou.then(|| palavra.clone());
+        if !palavra.is_empty() {
+            *primeira = false;
+        }
+        palavra.clear();
+        *glob = false;
+        *chave = false;
+        out
+    };
+    for ch in seg.chars() {
+        match aspa {
+            Some(a) => {
+                if ch == a {
+                    aspa = None;
+                }
+                palavra.push(ch);
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    aspa = Some(ch);
+                    palavra.push(ch);
+                }
+                c if c.is_whitespace() => {
+                    if let Some(w) = fecha(&mut palavra, &mut glob, &mut chave, &mut primeira) {
+                        return Some(w);
+                    }
+                }
+                '*' | '?' | '[' => {
+                    glob = true;
+                    palavra.push(ch);
+                }
+                '{' => {
+                    chave = true;
+                    palavra.push(ch);
+                }
+                _ => palavra.push(ch),
+            },
+        }
+    }
+    fecha(&mut palavra, &mut glob, &mut chave, &mut primeira)
+}
+
+/// Commands that print names or metadata, never contents: a glob in their arguments shows the model
+/// nothing it could not list anyway, so they keep `Auto`.
+fn so_lista_nomes(seg: &str) -> bool {
+    const NOMES: &[&str] = &["ls", "wc", "file", "stat", "du", "tree", "basename", "dirname", "realpath", "readlink"];
+    let c = seg.trim();
+    NOMES.iter().any(|n| c == *n || c.starts_with(&format!("{n} ")))
+        || c.starts_with("git ls-files")
+        || c.starts_with("git status")
+}
+
 fn segmento_permitido(seg: &str) -> bool {
     let c = seg.trim();
     if c.is_empty() {
@@ -1161,6 +1272,9 @@ fn segmento_permitido(seg: &str) -> bool {
         return false;
     }
     if expansao_de_variavel(c).is_some() {
+        return false;
+    }
+    if glob_sem_aspas(c).is_some() && !so_lista_nomes(c) {
         return false;
     }
     if let Some(ok) = leitura_condicional(c) {
@@ -1526,6 +1640,101 @@ mod tests {
         let root = sandbox();
         assert!(read_file(&root, ".env", MAX_BYTES).starts_with("RECUSADO"));
         assert!(read_file(&root, "src/main.rs", MAX_BYTES).contains("fn main"));
+    }
+
+    /// Approves everything and remembers the path the card named.
+    #[derive(Default)]
+    struct Aprova {
+        cartao: String,
+    }
+
+    impl Frontend for Aprova {
+        fn on_event(&mut self, _: &crate::types::Event) {}
+        fn end_stream(&mut self) {}
+        fn tool_result(&mut self, _: &ToolCall, _: &str) {}
+        fn turn_end(&mut self, _: &crate::telemetry::Telemetry) {}
+        fn error(&mut self, _: &str) {}
+        fn warn(&mut self, _: &str) {}
+        fn approve(&mut self, _: Policy, _: &str, _: &str, preview: &Preview) -> bool {
+            if let Preview::Diff { path, .. } = preview {
+                self.cartao = path.to_string();
+            }
+            true
+        }
+        fn continuar_apos_teto(&mut self, _: usize) -> bool {
+            false
+        }
+        fn aviso_teto(&mut self, _: usize) {}
+    }
+
+    /// 🔴 External review, 26/10/2026: the grep tool read what read_file refuses — a non-ignored
+    /// `certs/server.pem` came back line by line, and an explicit `.env` bypassed .gitignore.
+    #[test]
+    fn grep_respeita_a_denylist() {
+        let root = sandbox();
+        std::fs::create_dir_all(root.join("certs")).unwrap();
+        std::fs::write(root.join("certs/server.pem"), b"SECRET_PEM\n").unwrap();
+        std::fs::write(root.join("aws_credentials.txt"), b"SECRET_AWS\n").unwrap();
+        std::fs::write(root.join("src/lib.rs"), b"// SECRET is just a word here\n").unwrap();
+
+        let out = grep(&root, "SECRET", "", "");
+        assert!(!out.contains("SECRET_PEM") && !out.contains("SECRET_AWS"), "a denied file was read: {out}");
+        assert!(out.contains("src/lib.rs:1"), "an ordinary file is still searched: {out}");
+        assert!(out.contains("denylist"), "the model is told files were skipped: {out}");
+        assert!(grep(&root, "", ".env", "").starts_with("RECUSADO"));
+        assert!(!grep(&root, "SECRET", "certs", "").contains("SECRET_PEM"), "an explicit folder walks through the same check");
+    }
+
+    /// 🔴 External review, 26/10/2026: a symlink already in the tree (an untrusted repository
+    /// carries them) took the write outside the project, and took read/edit to denied files.
+    #[cfg(unix)]
+    #[test]
+    fn link_simbolico_nao_fura_o_confinamento_nem_a_denylist() {
+        use std::os::unix::fs::symlink;
+        let root = sandbox();
+        let fora = root.with_extension("fora");
+        std::fs::write(&fora, b"original\n").unwrap();
+        symlink(&fora, root.join("notes.md")).unwrap();
+        symlink(".env", root.join("readme-env.txt")).unwrap();
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::write(root.join(".git/hooks/pre-commit"), b"#!/bin/sh\n").unwrap();
+        symlink(".git/hooks/pre-commit", root.join("hook.txt")).unwrap();
+        let mut fe = Aprova::default();
+
+        assert!(write_file(&root, "notes.md", "PWNED\n", "1", &mut fe).starts_with("ERRO"));
+        assert_eq!(std::fs::read_to_string(&fora).unwrap(), "original\n", "the file outside the project is untouched");
+        assert!(read_file(&root, "readme-env.txt", MAX_BYTES).starts_with("RECUSADO"));
+        assert!(!grep(&root, "SECRET", "readme-env.txt", "").contains("SECRET=x"));
+        assert!(edit_file(&root, "hook.txt", "#!/bin/sh", "#!/bin/sh\nid", false, "2", &mut fe).starts_with("RECUSADO"));
+        assert!(write_file(&root, "hook.txt", "id\n", "3", &mut fe).starts_with("RECUSADO"));
+        assert_eq!(std::fs::read_to_string(root.join(".git/hooks/pre-commit")).unwrap(), "#!/bin/sh\n");
+        assert!(fe.cartao.is_empty(), "nothing above reached an approval card");
+
+        // A link that stays inside the project still works — and the card names the real file.
+        symlink("README.md", root.join("leia.md")).unwrap();
+        assert!(write_file(&root, "leia.md", "# Novo\n", "4", &mut fe).starts_with("ok"));
+        assert_eq!(fe.cartao, "leia.md → README.md");
+        assert_eq!(std::fs::read_to_string(root.join("README.md")).unwrap(), "# Novo\n");
+    }
+
+    /// 🔴 External review, 26/10/2026: the argument check reads tokens literally, so a glob the
+    /// SHELL expands to `.env` or `certs/server.pem` was `Auto` and its contents reached the model.
+    #[test]
+    fn glob_sem_aspas_nao_e_automatico() {
+        for cmd in ["cat .e*", "cat certs/*", "head -n 50 .e*", "cat *", "cat .{env,x}", "grep SECRET src/*.rs", "cd src && cat *"] {
+            assert_eq!(classify(cmd), Policy::Confirm, "should ask: {cmd}");
+        }
+        for cmd in [
+            "ls *.rs",
+            "ls -la src/*",
+            "wc -l src/*.rs",
+            "grep -rn --include=*.rs TODO src",
+            "grep -n \"fn .*x\" src/main.rs",
+            "grep -n 'a?b' README.md",
+            "git ls-files '*.rs'",
+        ] {
+            assert_eq!(classify(cmd), Policy::Auto, "should not ask: {cmd}");
+        }
     }
 
     #[test]

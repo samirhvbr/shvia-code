@@ -41,24 +41,22 @@ Proibido `feat:`/`fix:`/`chore:` e mensagens vagas.
 
 ---
 
-## Version carriers — three files hold the version, and they move together
+## Version carriers — manifests and changelog move together
 
 `version.md` is the authority, but it is not the only file that states the
-version. Three do, and a bump that moves only one is not a bump:
+version. The manifests and changelog must agree on every delivery, including docs:
 
 | File | Why it holds the version |
 |---|---|
 | `version.md` | The authority. What the Releases on GitHub must match. |
 | `Cargo.toml` | What `anna --version` prints — and what SHVIA-DESKTOP's `stage-anna.mjs` reads to enforce its version floor before packaging the engine. |
+| `Cargo.lock` | The resolved `anna` package version; validate with `cargo --locked`. |
 | `CHANGELOG.md` | The `## X.Y.Z` heading **is** the commit subject. |
 
-**A doc-only commit is where this breaks.** Every time it has happened, the
-commit touched `AGENTS.md`/`CLAUDE.md` and `version.md` and nothing else, so
-`Cargo.toml` was never in the diff to be noticed: the 0.11.2 bump went halfway,
-then 0.11.16, 0.11.17 and 0.11.18 did too, leaving the manifest three versions
-behind and this changelog two. Nothing warned, either time, because nothing
-checks — the comment in `Cargo.toml` says the old claim that `build-local.sh`
-verified it was simply false.
+**Documentation-only changes also synchronize these carriers.** Earlier partial bumps
+left the manifest behind; `build.rs` now rejects divergent compiled versions, and
+`cargo --locked` prevents a stale lock from silently being rewritten first. The
+changelog heading remains a separate review check. See [development](docs/DEVELOPMENT.md).
 
 Before committing a bump, one command says whether the carriers agree:
 
@@ -69,9 +67,16 @@ printf 'version.md  %s\nCargo.toml  %s\nCHANGELOG   %s\n' \
   "$(grep -m1 '^## ' CHANGELOG.md | sed 's/## //; s/ -.*//')"
 ```
 
-Three identical numbers, or the bump is not finished.
+The printed numbers and the `anna` package in Cargo.lock must agree; run locked checks.
 
 ---
+
+## Current documentation and publication boundary
+
+Read [docs/README.md](docs/README.md), [the user guide](docs/USER-GUIDE.md) and
+[the source review](docs/DOCUMENTATION-REVIEW-20261015.md). Work on a branch/worktree
+and propose a PR; never publish directly to master/main. Opening a PR does not
+authorize merge, release, installation or deployment.
 
 ## Regras do produto (não relitigar sem ADR)
 

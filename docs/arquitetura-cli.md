@@ -82,8 +82,12 @@ There is no eventsource-stream, ratatui or thiserror dependency. SSE framing is 
    orphan tool results.
 3. Call `/api/v1/code/chat` with the current profile/effort and runner's tool definitions.
 4. Stream frontend text/tool events, collect usage, and report gateway errors.
-5. With tool calls, run them through the selected runner, append assistant/tool history,
-   and repeat. With a final answer, end the turn.
+5. Append the assistant response to the history once, including a final answer without
+   tool calls (0.13.8+; an empty final answer is left out, since some providers reject an
+   empty assistant turn). With tool calls, run them through the selected runner, append
+   the tool results, and repeat. With a final answer, end the turn. The next request
+   therefore carries what the assistant already said, and terminal autosave/resume keep
+   it; `tests/assistant_history.rs` checks this against a local SSE fixture.
 6. At `max_voltas` (100 by default), the interactive terminal may grant another batch;
    JSON hosts end the turn with a warning and can submit a subsequent user turn.
 

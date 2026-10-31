@@ -125,10 +125,9 @@ that every desired test executed.
 Normal REPL turns autosave under `~/.shvia-code/sessions/`. JSON contains the message
 history retained by the loop, first-prompt title, usage totals and model metadata.
 The loop compacts long history: past 150 messages it cuts down to 100, keeping the
-session's first request and the latest one; this is not an immutable full transcript. The current final-answer path also does not append that
-final assistant reply to stored messages. [PR #13](https://github.com/samirhvbr/shvia-code/pull/13)
-proposes that fix and was still open on 2026-10-26; it is not present in this branch.
-See the fidelity finding in the review. On Unix, the store applies `0700` to its directory and `0600`
+session's first request and the latest one; this is not an immutable full transcript. Since
+0.13.8 the history also keeps the assistant's final answers (an empty one is left out), so a
+resumed session and the next request carry what the assistant already said. On Unix, the store applies `0700` to its directory and `0600`
 to files. Saves are best effort. There is no scheduled expiration or cloud sync.
 
 `sessions clear --older-than 30` removes files last modified over 30 days ago. Omitting

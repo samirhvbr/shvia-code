@@ -57,10 +57,12 @@ Validation failures return 422, with one exception: oversized `role:tool` conten
 trimmed, with an omission marker, before field validation. Non-tool content above the
 limit is refused.
 
-**Stateless conversation:** each request carries the retained history. The CLI compacts
-long history to a recent window around 150 messages before sending, preserving initial
-system context and avoiding orphan tool results. The server's 200-message limit and this
-client window form a shared contract; changing one requires checking the other.
+**Stateless conversation:** each request carries the retained history. When the history
+goes over 150 messages, the CLI cuts it down to 100 before sending (0.13.6+; earlier
+versions slid a 150-message window on every round), preserving initial system context,
+the session's first and latest `user` messages, and avoiding orphan tool results. The
+server's 200-message limit and these client numbers form a shared contract; changing one
+requires checking the other.
 
 ### Imagem no turno do usuário (0.11.4+)
 

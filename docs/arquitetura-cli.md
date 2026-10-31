@@ -77,8 +77,9 @@ There is no eventsource-stream, ratatui or thiserror dependency. SSE framing is 
 ## 4. Agent turn
 
 1. Add the user input; clear prior-turn images when a JSON host submits a new turn.
-2. Compact long message history to a recent window around 150 messages, preserving the
-   initial system context and avoiding orphan tool results.
+2. Compact long message history: past 150 messages, cut down to 100, preserving the
+   initial system context and the session's first and latest requests, and avoiding
+   orphan tool results.
 3. Call `/api/v1/code/chat` with the current profile/effort and runner's tool definitions.
 4. Stream frontend text/tool events, collect usage, and report gateway errors.
 5. With tool calls, run them through the selected runner, append assistant/tool history,

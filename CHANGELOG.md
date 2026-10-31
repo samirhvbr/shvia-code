@@ -18,6 +18,13 @@ verify the next NDJSON request, terminal autosave, a resumed request, and the
 orchestrator's retry. The tests isolate the home directory on Unix; no live model
 or Windows session-store behavior is covered.
 
+An empty final answer (no text, no tool calls) stays out of the history: it has
+nothing to remember, and the gateway's OpenAI-compatible driver would send it as
+`{"role":"assistant","content":""}` in the middle of the conversation, which some
+providers reject (the Anthropic driver already drops it). Test
+`a_resposta_entra_no_historico_e_a_vazia_fica_de_fora`; without the check it fails
+on the empty answer.
+
 ## 0.13.7 - Take the patched quinn-proto, which stopped `install.sh` at its strict dependency audit
 
 `./install.sh` runs `build-local.sh --audit-strict`, and on 31/10/2026 it stopped there with "5 vulnerabilities found":

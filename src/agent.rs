@@ -11,7 +11,7 @@ use crate::memory;
 use crate::project::Project;
 use crate::runner::ToolRunner;
 use crate::telemetry::Telemetry;
-use crate::types::Message;
+use crate::types::{Message, ToolCall};
 use anyhow::Result;
 
 // ── Per-request history ceiling ───────────────────────────────────────────────
@@ -117,6 +117,19 @@ fn compactar_historico(messages: &mut Vec<Message>) -> usize {
     removidas
 }
 
+/// Appends the model's response to the history, once, whether or not it asks for tools.
+///
+/// An empty final answer (no text, no tool calls) is left out: it carries nothing for the next
+/// request to remember, and the gateway's OpenAI-compatible driver would send it as
+/// `{"role":"assistant","content":""}` in the middle of the history, which some providers
+/// reject. The gateway's Anthropic driver already drops it.
+fn registrar_resposta(messages: &mut Vec<Message>, text: &str, tool_calls: &[ToolCall]) {
+    if text.is_empty() && tool_calls.is_empty() {
+        return;
+    }
+    messages.push(Message::assistant(text, tool_calls.to_vec()));
+}
+
 /// Devolve o TEXTO final do turno (o que o modelo respondeu sem pedir mais
 /// ferramenta). O REPL descarta; o orquestrador precisa — é dali que sai o
 /// artefato JSON das fases arquiteto/revisor. Erro do gateway devolve texto
@@ -172,7 +185,7 @@ pub async fn run_turn(
             return Ok(String::new());
         }
         ultimo_texto = result.text.clone();
-        messages.push(Message::assistant(result.text.clone(), result.tool_calls.clone()));
+        registrar_resposta(messages, &result.text, &result.tool_calls);
         if result.tool_calls.is_empty() {
             fe.turn_end(telemetry);
             return Ok(ultimo_texto);
@@ -208,6 +221,18 @@ mod tests {
             }
         }
         m
+    }
+
+    #[test]
+    fn a_resposta_entra_no_historico_e_a_vazia_fica_de_fora() {
+        let chamada = ToolCall { id: "c1".into(), name: "read_file".into(), arguments: serde_json::json!({}) };
+        let mut m = vec![Message::user("pedido")];
+        registrar_resposta(&mut m, "", &[]);
+        assert_eq!(m.len(), 1, "an empty final answer must not become an empty assistant turn");
+        registrar_resposta(&mut m, "", std::slice::from_ref(&chamada));
+        assert_eq!((m.len(), m[1].tool_calls.len()), (2, 1), "a tool call with no text still goes in");
+        registrar_resposta(&mut m, "resposta final", &[]);
+        assert_eq!((m[2].role.as_str(), m[2].content.as_str()), ("assistant", "resposta final"));
     }
 
     #[test]

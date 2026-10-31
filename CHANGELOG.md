@@ -3,6 +3,18 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.7 - Take the patched quinn-proto, which stopped `install.sh` at its strict dependency audit
+
+`./install.sh` runs `build-local.sh --audit-strict`, and on 31/10/2026 it stopped there with "5 vulnerabilities found":
+`quinn-proto` 0.11.16 in `Cargo.lock` has RUSTSEC-2026-0338, -0339, -0340, -0341 and -0342 (two of them 7.5 high). The
+owner hit it installing 0.13.6 on the Linux build machine, which the Desktop needs since its `anna` floor moved to 0.13.6.
+
+- `cargo update -p quinn-proto`: 0.11.16 → 0.11.19, the only package the lock moves.
+- `quinn-proto` is not compiled into `anna`: `cargo tree -i quinn-proto --target all --all-features` prints nothing. It sits
+  in the lock as `reqwest`'s optional HTTP/3 dependency, and `cargo audit` reads the lock, not the build graph.
+- After the update, `cargo audit` reports no vulnerability (the two yanked warnings, `chacha20` and `clipboard-win`, are
+  allowed and do not stop the install) and `cargo deny check advisories` is ok.
+
 ## 0.13.6 - Keep the person's requests through history compaction, and compact once every ~25 rounds instead of on every round
 
 The loop compacts the history before each request so it stays under the gateway's 200-message

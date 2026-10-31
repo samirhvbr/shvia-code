@@ -1,5 +1,10 @@
 # Catálogo de ferramentas v1
 
+> **Source review, 2026-10-15:** current usage is in the [user guide](USER-GUIDE.md).
+> The registry has eleven tools, including `todo_write`. Local filesystem tools and
+> shell approval have different security boundaries; read the actual controls and gaps
+> in [SECURITY_GUIDELINES.md](../SECURITY_GUIDELINES.md).
+
 > As ferramentas que o `anna` **envia** ao modelo (`tools[]` do protocolo) e
 > **executa localmente** no loop. Poucas e afiadas (escopo §4). Cada uma tem:
 > schema JSON (o que o modelo vê), **gate** (política de aprovação) e formato do
@@ -12,7 +17,7 @@
 
 | Gate | Significado | UI |
 |------|-------------|----|
-| **auto** | roda sem perguntar (read-only, sem efeito colateral) | mostra o que fez |
+| **auto** | runs without asking; shell builds/tests can have side effects | mostra o que fez |
 | **confirm** | mostra a ação e pede `[s]im / [n]ão / [t]udo nesta sessão` | `t` libera aquela tool até fechar |
 | **always** | confirma SEMPRE, `t` não vale (destrutivo) | destaque vermelho |
 
@@ -28,10 +33,12 @@ libera `bash`). **Não existe `--yolo` no v1.**
    "properties":{"path":{"type":"string","description":"Caminho relativo à raiz do projeto."},
      "max_bytes":{"type":"integer","description":"Teto opcional (default 64 KiB); acima disso, recorta e avisa."}}}}
 ```
-Resultado: conteúdo (recortado se > teto, com `… [truncado em N bytes]`). Recusa
-paths na **denylist** (`.env*`, `*.pem/key/p8/p12/pfx`, `id_rsa*`, `*credentials*`,
-`~/.ssh`, `~/.aws`) → override só com confirmação do dev. Fora da raiz do projeto → recusa.
-Since 0.13.6 the denylist is also checked against the file's **real path, after every
+Result: returned file text, sliced at the requested limit with a truncation notice.
+The requested-name denylist refuses `.env`/`.env.*` except `.env.example`, private-key
+extensions/names, credential paths and `.git`; there is no interactive file-tool override.
+Canonical paths must stay in the project. The requested name and resolved target are
+separate checks; search and alias limitations are in the security guide.
+Since 0.13.9 the denylist is also checked against the file's **real path, after every
 symlink**: `readme.txt -> .env` used to be read with no approval (external review,
 26/10/2026).
 
@@ -41,8 +48,8 @@ symlink**: `readme.txt -> .env` used to be read with no approval (external revie
  "parameters":{"type":"object","required":["path"],
    "properties":{"path":{"type":"string","description":"Relativo à raiz ('.' = raiz)."}}}}
 ```
-Resultado: uma entrada por linha (`dir/` com barra). **Respeita `.gitignore`** e
-oculta `.git/`.
+Result: one entry per line (`dir/` for directories). The walker respects ignore
+rules but `list_dir` explicitly enables hidden entries; this is not a secret-name filter.
 
 ### `grep` · gate: auto
 ```json
@@ -53,7 +60,7 @@ oculta `.git/`.
      "glob":{"type":"string","description":"Filtro de arquivo, ex.: '*.php'."}}}}
 ```
 Resultado: `arquivo:linha: trecho` (teto de N hits; avisa se cortou). Respeita `.gitignore`.
-Since 0.13.6 it applies the same denylist as `read_file`: an explicit `path` on the list is
+Since 0.13.9 it applies the same denylist as `read_file`: an explicit `path` on the list is
 refused, and files on it are skipped during the walk (by their real path), with one closing
 line saying how many were skipped. Until then `grep SECRET` returned the lines of a
 non-ignored `certs/server.pem`, and `path=".env"` bypassed `.gitignore` and the hidden-file
@@ -86,7 +93,7 @@ o erro. Nunca escreve sem mostrar.
 ```
 Sobrescrever arquivo existente → diff contra o atual antes de confirmar. Novo →
 mostra o conteúdo. Recusa paths da denylist.
-Since 0.13.6 a name that already exists is resolved through its symlinks: the real file must
+Since 0.13.9 a name that already exists is resolved through its symlinks: the real file must
 stay inside the project and off the denylist, and the approval card names it
 (`notes.md → docs/notes-v2.md`). Until then only the parent folder was checked, so a link
 already in the tree (`notes.md -> ../outside.txt`, or `hook.txt -> .git/hooks/pre-commit`)
@@ -119,7 +126,7 @@ check.
   entre aspas, invisíveis ao scanner — mesmo critério que já mantinha o `sed` fora);
   `git branch` só é auto nas formas de leitura (`-D`/`-m` pedem cartão); `sort -o` e o
   segundo posicional do `uniq` são destino de escrita.
-- 🔴 **An unquoted glob in a command that prints file contents asks (since 0.13.6).** The
+- 🔴 **An unquoted glob in a command that prints file contents asks (since 0.13.9).** The
   argument check reads tokens literally, and the shell expands globs after it: `cat .e*`,
   `cat certs/*` and `head -n 50 .e*` were **auto** and printed `.env` and
   `certs/server.pem` (external review, 26/10/2026). Now a non-flag word with `*`, `?`, `[`
@@ -131,7 +138,7 @@ check.
 - **O que a guarda de argumento NÃO fecha, e está escrito para não ser confundido:** busca
   recursiva (`grep -r X .`) segue em auto e pode imprimir uma linha vinda de um `.env` do
   projeto. Decidir por conteúdo é outra guarda, com outro custo. The `grep` **tool** does not
-  have this gap since 0.13.6 — it skips denied files — so it is the safe way to search.
+  have this gap since 0.13.9 — it skips denied files — so it is the safe way to search.
 - **`npm run <script>`, `cargo build/test` e `make test` seguem em auto por DECISÃO:** eles
   executam o que o projeto declara (`package.json`, `Cargo.toml`, `Makefile`), e um prompt
   injetado não muda esses arquivos sem passar por `write_file`/`edit_file`, que têm cartão.
@@ -192,6 +199,11 @@ Wrappers de `git status --porcelain` / `git diff [--staged]`. Resultado = a saí
 Mostra o `git diff --staged` + a mensagem, confirma, commita. **`git push` NUNCA
 é implícito** — só via `bash` explícito (e cai no gate destrutivo).
 
+**Current staging caveat:** `add_all=true` runs `git add -A` before the approval
+question; refusing the commit can leave unrelated files staged. Review this separately
+from commit approval, and prefer explicitly staging intended paths. See the
+[source finding](DOCUMENTATION-REVIEW-20261015.md).
+
 ### `todo_write` · gate: auto (0.13.0)
 ```json
 {"name":"todo_write","description":"Mantém a lista de tarefas deste trabalho (a lista INTEIRA a cada chamada)...",
@@ -222,32 +234,33 @@ Convenções do `content`:
 
 ## 4. Recorte & limites
 
-- Todo resultado tem teto de bytes (default 64 KiB); acima, recorta com aviso —
-  protege o contexto e o custo. `read_file` aceita `max_bytes`.
-- `.gitignore` respeitado em list/grep/glob; `.git/` oculto. Only inside a git repository:
-  the `ignore` crate reads `.gitignore` only where there is a `.git` (measured 26/10/2026), so
-  in a plain folder an ignored file is listed and searched. The denylist does not depend on
-  this.
+- Limits differ by tool: `read_file` defaults to 64 KiB returned text and accepts
+  `max_bytes`; it reads the whole file before slicing. Search/glob stop around 200
+  matches; shell output is truncated near 32 KiB after capture. This is not a global
+  output or process-memory bound.
+- Walk tools use ignore rules, and only inside a git repository: the `ignore` crate reads
+  `.gitignore` only where there is a `.git` (measured 26/10/2026), so in a plain folder an
+  ignored file is listed and searched. Since 0.13.9 `grep` also applies `guard::denied` by
+  real path; `list_dir` and `glob` list names without it. Ignore rules and automatic shell
+  classification must not be treated as a secret-containment policy.
 - Teto de voltas de tool por turno (default 100, `max_voltas`/`SHVIA_MAX_VOLTAS`)
   no loop (SECURITY §2.7) — estouro pergunta ao dev no terminal; no host encerra
   o turno com a sessão preservada ("continua" retoma).
 
 ## 5. Checkpoint automático & `/rollback` (0.8.0)
 
-Antes de toda mutação aprovada (`edit_file`, `write_file` e `bash` destrutivo),
-a anna fotografa o working tree num commit **fora da branch** (índice
-temporário via `GIT_INDEX_FILE` + `write-tree`/`commit-tree`), apontado por
-`refs/anna/checkpoint`. O índice real e a working tree **não são tocados** —
-`git status` do dev continua idêntico. Rajadas de edição num mesmo turno
-compartilham uma foto (debounce 30 s). Fora de repo git: silenciosamente
-desativado (rede de segurança, nunca bloqueia edição).
+Before approved `edit_file`/`write_file` calls and classified destructive shell
+commands, the engine attempts a snapshot using a temporary Git index and a commit at
+`refs/anna/checkpoint`, outside the current branch. Snapshot creation leaves the real
+index and working tree unchanged. A 30-second debounce groups bursts of operations.
+Failures are silent and do not stop a write; this is best effort, not a transaction.
 
 Restaurar é ação do **dev** no REPL (nunca uma tool do modelo):
 
 - `/rollback` — mostra o `diff --stat` desde a foto (o que seria desfeito);
-- `/rollback aplicar` — restaura o conteúdo **rastreado** da foto na working
-  tree (índice/branch intocados). Limite documentado: arquivos **criados
-  depois** da foto permanecem no disco (remoção manual).
+- `/rollback aplicar` restores checkpoint content in the working tree. Files created
+  after the snapshot remain. The modern `git restore` path leaves the index intact;
+  the legacy `git checkout` fallback can change it.
 
 Inspiração: checkpoints de filesystem do hermes-agent (`/rollback`), adaptados
 ao modelo client-side do anna — git como storage, zero estado fora do repo.

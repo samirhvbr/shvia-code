@@ -1,263 +1,155 @@
-# Arquitetura do CLI `anna` (Rust)
+# Architecture of the `anna` CLI
 
-> O plano de build do **C1+** (o binário `anna`). Complementa
-> [protocolo.md](protocolo.md) (contrato com o servidor) e
-> [ferramentas.md](ferramentas.md) (o que a Anna faz). Decisões de estrutura
-> aqui; regras de produto no [CLAUDE.md](../CLAUDE.md); segurança no
-> [SECURITY_GUIDELINES.md](../SECURITY_GUIDELINES.md).
+> **Current source map, reviewed 2026-10-15.** Source inspection and local checks do
+> not certify live gateway behavior or installed Desktop/Workspace integration.
+> [User guide](USER-GUIDE.md) · [tools](ferramentas.md) · [embedding](embedding.md) ·
+> [development and distribution](DEVELOPMENT.md) · [security](../SECURITY_GUIDELINES.md).
 
----
+## 1. Runtime boundaries
 
-## 1. Princípios
+The Rust executable owns project detection, conversation, the agent loop and its frontend.
+`api.rs` sends messages/tool definitions to the ShvIA gateway and consumes SSE. In local
+mode `tools.rs` executes under the user's account; in host mode `runner.rs` delegates
+only shell proposals to an external executor. Provider routing, quota and server policy
+belong to ShvIA Web. This CLI does not implement an OS sandbox or a model catalog browser.
 
-- **Binário único, sem runtime** (por isso Rust — ADR-001). `anna` roda em
-  qualquer máquina com a API key, sem Node/PHP instalados.
-- **Loop no cliente**: o servidor infere; as mãos (tools) e os gates são aqui.
-- **Streaming first**: a resposta aparece token a token; nada de "spinner e espera".
-- **Nada roda/escreve sem o dev ver** (gates — ferramentas.md §1).
-- **Camadas finas e testáveis**: api / agent / tools / gate / ui separados; o
-  loop não sabe de terminal, as tools não sabem de rede.
+The terminal is a scrolling `rustyline` REPL with crossterm menus, Markdown, diff previews
+and a spinner. A full-screen ratatui UI was considered but is not a dependency or runtime.
+The same loop uses a `Frontend` trait for terminal output and NDJSON hosts.
 
-## 2. Árvore de módulos
+## 2. Module inventory
 
-> **Esta seção descrevia um plano, não o código** — até 02/09/2026 ela listava
-> `api/{mod,sse,types}.rs`, `tools/{mod,fs,edit,shell,git,guard}.rs`, `ui/{mod,repl,tui}.rs`,
-> `cli.rs` e `error.rs`, nenhum dos quais chegou a existir; o desenho por subdiretório foi
-> abandonado cedo e ninguém voltou aqui. Pior que estar velha, ela estava sendo **mantida
-> velha**: as descrições de `shell.rs` chegaram a ganhar as notas dos achados F-04 e F-05,
-> escritas dentro de um arquivo inexistente. Agora a árvore é a real, e a régua
-> `arvore_da_doc_bate_com_src` (em `src/main.rs`) reprova a próxima divergência.
-> Achado F-10 da revisão de setembro/2026.
-
-O `src/` é **plano**: um arquivo por assunto, sem subdiretório. A separação de camadas que
-a §1 promete é de responsabilidade, não de pasta — `agent.rs` não sabe de terminal e
-`tools.rs` não sabe de rede, estando os dois no mesmo nível.
+The modules are flat files under `src/`. A previous directory-based design was
+reconciled in September 2026; `arvore_da_doc_bate_com_src` now checks this inventory
+against the real files. Responsibilities, rather than mutable line counts, belong here.
 
 ```
 src/
-  tools.rs       TODAS as tools num arquivo: read_file/list_dir/grep, edit_file,
-                 write_file, bash e git. Inclui a ALLOWLIST e a classificação por
-                 token (F-02/F-03), o teto de tempo e a morte do GRUPO (F-04), e a
-                 leitura de destrutivo por token (F-05). É o maior do repo — o
-                 cabeçalho do arquivo admite e diz por que ainda não foi partido.  (1688 linhas)
-  main.rs        Entrypoint: args (clap, declarados aqui — não há `cli.rs`), config,
-                 modo REPL ou `-p/--print` não-interativo. Réguas do repositório.  (866 linhas)
-  stats.rs       O cérebro do `anna stats` (a tela "Wrapped"): agrega as sessões
-                 locais em números, heatmap e quebra por modelo. Puro e testável.  (549 linhas)
-  config.rs      `~/.config/shvia-code/config.toml` (0600) + overrides por env
-                 (SHVIA_URL, SHVIA_API_KEY, SHVIA_PROFILE). Chave nunca em arg.  (484 linhas)
-  orquestrador.rs Modo autônomo: plano, verificação e retomada entre turnos.  (460 linhas)
-  plano.rs       Plano de execução do modo autônomo (passos, estado, retomada).  (302 linhas)
-  stats_html.rs  Render das estatísticas em HTML (escapa o que interpola — F-08).  (278 linhas)
-  session.rs     `~/.shvia-code/sessions/<id>.json` (0600): salvar, retomar, limpar
-                 por idade.  (257 linhas)
-  stats_term.rs  Render das estatísticas no terminal.  (280 linhas)
-  agent.rs       O LOOP agêntico (§4): monta payload, consome eventos, dispara tools,
-                 reenvia. Teto de voltas. Agnóstico de UI.  (222 linhas)
-  menu.rs        The approval menu: a short list picked with arrows, a number or a
-                 letter. A pure state machine plus the raw-mode drawing; a cancelled
-                 menu is a "no" (ADR-004).  (265 linhas)
-  ui.rs          A interface do terminal: stream com o `●` do assistente, títulos e
-                 resumos de ferramenta, spinner, rodapé, prompts de gate. O `repl.rs`/
-                 `tui.rs` do plano não existem; não há TUI (ratatui) neste código (ADR-004).  (373 linhas)
-  view.rs        What a turn looks like, as pure functions: `● Read(path)` titles,
-                 `⎿` result summaries, the footer, the welcome box. Nothing prints, so
-                 all of it is tested without a terminal.  (464 linhas)
-  term.rs        What the terminal supports, decided once (colour: TTY, `NO_COLOR`,
-                 `FORCE_COLOR`; width; the spinner), and the only module that writes
-                 ANSI (ADR-004).  (349 linhas)
-  memory.rs      Memória de longo prazo por HTTP — exige URL segura (F-07).  (208 linhas)
-  json.rs        `JsonSink` — o `Frontend` que fala NDJSON em vez de ANSI. O host lê
-                 os eventos do stdout e responde aprovação pelo stdin.  (167 linhas)
-  checkpoint.rs  Checkpoint de segurança: antes de TODA mutação aprovada, fotografa o
-                 working tree num commit FORA da branch (índice temporário,
-                 `refs/anna/checkpoint`). Não toca o índice do dev.  (183 linhas)
-  api.rs         Cliente do gateway (`POST /api/v1/code/chat`) + parser do SSE. Uma
-                 chamada = uma "volta". O `sse.rs` separado nunca existiu.  (149 linhas)
-  types.rs       Structs do protocolo (docs/protocolo.md). Serde apenas, sem lógica.  (139 linhas)
-  runner.rs      QUEM executa as tools (ADR-002): `LocalRunner` roda na máquina do
-                 `anna`; `HostRunner` só PROPÕE e espera a casca externa devolver o
-                 resultado.  (129 linhas)
-  project.rs     Detecta a raiz (git), lê ANNA.md / CLAUDE.md / AGENTS.md, monta o
-                 system prompt e o cabeçalho da sessão.  (105 linhas)
-  papel.rs       Papéis do pipeline (arquiteto → executor → revisor) e o elenco:
-                 a tabela papel → (perfil, esforço) do `config.toml`.  (82 linhas)
-  guard.rs       Denylist de leitura + confinamento à raiz do projeto (realpath).  (80 linhas)
-  render.rs      Markdown **por linha**, para funcionar com streaming: cada linha é
-                 estilizada quando fica completa. `Md` guarda o pouco estado que uma
-                 linha não basta para saber (cerca aberta e sua linguagem, tabela
-                 pendente); estilos aninham; destaque de sintaxe por linha.  (671 linhas)
-  diff.rs        Diff (crate `similar`) — o preview de `edit_file` e `write_file`:
-                 `pretty` no terminal (número de linha, fundo vermelho/verde), `unified`
-                 cru no NDJSON.  (151 linhas)
-  gate.rs        Política de aprovação (Auto|Confirm|Always), o que mostrar antes de
-                 aprovar e `confirm` (sim/não pelo menu, ou a linha do stdin). Sem yolo.  (62 linhas)
-  telemetry.rs   Custo/tokens por turno, a partir do evento `usage`.  (43 linhas)
-  frontend.rs    O trait `Frontend`: renderizar os eventos do turno e DECIDIR
-                 aprovações. É o que deixa o motor embutível — o mesmo
-                 `agent::run_turn` serve o terminal e um host externo.  (41 linhas)
+  main.rs        Arguments, REPL, one-shot/JSON entrypoints and config/session/stats commands.
+  agent.rs       Bounded agent loop, history compaction, tool results and usage handling.
+  api.rs         Gateway HTTP request and SSE framing/event aggregation.
+  types.rs       Request, message, tool and event wire types.
+  tools.rs       Eleven-tool registry, file/search/edit/shell/Git/task execution and classification.
+  guard.rs       Requested-name denylist and canonical project-path helpers.
+  runner.rs      Local/host runners and the read-only role decorator.
+  frontend.rs    Frontend trait for rendering and approval decisions.
+  gate.rs        Auto/Confirm/Always policy, previews and terminal confirmation helpers.
+  ui.rs          Terminal frontend, previews, tool summaries and interactive decisions.
+  json.rs        NDJSON events and stdin approval decisions for external hosts.
+  config.rs      OS config path, overrides, role routing, URL guard and key setter.
+  project.rs     Root/context detection and agent/project system prompts.
+  session.rs     Local JSON session save/load/list and manual age-based deletion.
+  checkpoint.rs  Best-effort Git snapshots through a temporary index and explicit restore.
+  memory.rs      Optional best-effort ai-memory hook export with URL guard.
+  orquestrador.rs Terminal architect/executor/reviewer pipeline and verification commands.
+  papel.rs       Role identities/default effort and role configuration types.
+  plano.rs       Plan/verdict artifact parsing and validation.
+  term.rs        Terminal capabilities, color, width, ANSI handling and spinner.
+  menu.rs        Arrow/shortcut approval-menu state and terminal interaction.
+  view.rs        Pure welcome, action, result-summary and footer formatting.
+  render.rs      Streaming Markdown state, tables/lists and line-based code highlighting.
+  diff.rs        Terminal numbered/color diff and plain unified host preview.
+  telemetry.rs   Token/cost accumulation from gateway usage.
+  stats.rs       Pure session aggregation, dates, ranges, models and heatmap data.
+  stats_term.rs  Terminal statistics rendering.
+  stats_html.rs  Escaped standalone HTML statistics rendering.
 ```
 
-Não há `error.rs`: os erros usam `anyhow` no ponto de uso. A regra que aquele módulo
-existia para carregar continua valendo e está em `config.rs` — **a API key nunca aparece em
-mensagem de erro**.
+There is no separate `cli.rs`, `sse.rs` or `error.rs`; those responsibilities live in
+`main.rs`, `api.rs` and `anyhow` at call sites. See [security](../SECURITY_GUIDELINES.md)
+for the implemented controls and remaining gaps.
 
-## 3. Dependências (Cargo)
+## 3. Dependencies actually used
 
-| Crate | Uso | Por quê |
-|-------|-----|---------|
-| `tokio` (rt-multi-thread, macros) | async runtime | streaming SSE sem travar a UI |
-| `reqwest` (stream, rustls-tls, **sem** default-features) | HTTP/SSE | maduro; **rustls** = TLS sem OpenSSL do SO (SECURITY §4) |
-| `eventsource-stream` *(ou parser próprio em `sse.rs`)* | framing SSE | evita reimplementar o `data:`/`\n\n` |
-| `serde`, `serde_json` | (de)serialização | payload e eventos |
-| `clap` (derive) | args/subcomandos | padrão de CLI em Rust |
-| `rustyline` | REPL (C1) | histórico/edição de linha prontos |
-| `ratatui` + `crossterm` | TUI (C3) | opcional; só quando o REPL apertar |
-| `toml` | config | `~/.config/shvia-code/config.toml` |
-| `directories` | caminhos por SO | `~/.config`, `~/.local/share` corretos no mac/Linux |
-| `ignore` | walk respeitando `.gitignore` | mesma engine do ripgrep; list/grep/glob |
-| `grep-regex`/`regex` | busca | `grep` |
-| `similar` | diff | diff unificado colorido pro `edit_file`/`write_file` |
-| `anyhow`, `thiserror` | erros | ergonomia + tipos onde precisa |
-| `crossterm` (style) | cores | render de markdown/diff |
+| Dependency | Responsibility |
+|---|---|
+| `tokio`, `futures-util` | Async runtime and HTTP stream consumption |
+| `reqwest` with rustls | Gateway and optional memory-hook HTTPS; no system OpenSSL requirement |
+| `serde`, `serde_json`, `toml` | Wire, session and configuration serialization |
+| `clap`, `rustyline`, `crossterm`, `unicode-width` | Arguments, line editing, menus and terminal rendering |
+| `ignore`, `regex`, `globset`, `similar` | Walking/searching files and diff previews |
+| `directories`, `chrono`, `anyhow` | OS paths, local date aggregation and errors |
+| Windows-only `windows-sys` | Shell timeout process-tree Job Objects |
 
-**Segurança de deps (SECURITY §4):** `Cargo.lock` versionado; `cargo audit` no
-build-local; `cargo clippy -D warnings` antes de release; TLS via rustls.
+There is no eventsource-stream, ratatui or thiserror dependency. SSE framing is in
+`api.rs`. The authoritative versions/features are in [Cargo.toml](../Cargo.toml).
 
-## 4. O loop agêntico (agent.rs)
+## 4. Agent turn
 
-```rust
-// pseudocódigo
-async fn turn(state: &mut Session, ui: &dyn Ui, gate: &mut Gate) -> Result<()> {
-    let (lote, mut teto, mut volta) = (cfg.max_voltas, cfg.max_voltas, 0);
-    while volta < teto || ui.continuar_apos_teto(teto) { // estouro: só o terminal interativo pergunta
-        if volta >= teto { teto += lote; }                // cada "sim" = exatamente mais um lote
-        volta += 1;
-        let resp = api::code_chat(&state.messages, tools::defs(), &cfg).await?;
-        // resp já foi renderizada ao vivo pelo ui (text_delta) e coletou tool_calls/usage
-        telemetry::add(resp.usage);
-        if resp.tool_calls.is_empty() {
-            return Ok(());                              // resposta final → fim do turno
-        }
-        state.push_assistant(resp.text, &resp.tool_calls);
-        for call in resp.tool_calls {
-            let out = tools::run(&call, ui, gate).await; // executa LOCAL, com gate
-            state.push_tool(call.id, out);               // role=tool
-        }
-    }
-    ui.aviso_teto(teto); // conselho por casca: REPL/host vivo = "continua"; -p = teto maior
-    Ok(())
-}
-```
+1. Add the user input; clear prior-turn images when a JSON host submits a new turn.
+2. Compact long message history: past 150 messages, cut down to 100, preserving the
+   initial system context and the session's first and latest requests, and avoiding
+   orphan tool results.
+3. Call `/api/v1/code/chat` with the current profile/effort and runner's tool definitions.
+4. Stream frontend text/tool events, collect usage, and report gateway errors.
+5. Append the assistant response to the history once, including a final answer without
+   tool calls (0.13.8+; an empty final answer is left out, since some providers reject an
+   empty assistant turn). With tool calls, run them through the selected runner, append
+   the tool results, and repeat. With a final answer, end the turn. The next request
+   therefore carries what the assistant already said, and terminal autosave/resume keep
+   it; `tests/assistant_history.rs` checks this against a local SSE fixture.
+6. At `max_voltas` (100 by default), the interactive terminal may grant another batch;
+   JSON hosts end the turn with a warning and can submit a subsequent user turn.
 
-`tools::run` resolve nome→executor no registry, aplica o gate (auto/confirm/
-always), executa e devolve o `content` (sucesso/`ERRO:`/`RECUSADO:`).
+The runner decorator `SomenteLeitura` restricts architect/reviewer tools on both
+advertisement and execution. It offers filesystem/Git reads and `todo_write`, without
+shell, writes or commits. The pipeline passes plan/verdict artifacts between separate
+role histories. It is sequential and terminal-only, not a parallel-agent scheduler.
 
-## 5. Config & sessões
+## 5. Configuration and state
 
-**`~/.config/shvia-code/config.toml`** (0600):
-```toml
-url           = "https://ai.shvia.org"
-profile       = "qwen-coder@shvia1"  # opcional; default do usuário se ausente
-max_voltas    = 100                  # teto de voltas por turno (env SHVIA_MAX_VOLTAS ganha)
-bash_timeout  = 120                  # teto por comando, em segundos; 0 desliga (F-04)
-api_key       = "shvia_usr_…"        # 0600 — use `anna config set-key`, que grava assim
-# Precedência: env SHVIA_API_KEY > config. Nunca em argumento de linha.
-```
+The [user guide](USER-GUIDE.md#configuration) documents OS-specific paths, all settings,
+precedence and illustrative role profiles. The key can come from environment or config;
+`set-key` supports stdin and a positional argument, so use stdin for secret hygiene.
+The setter applies Unix `0600` before rename but currently writes the temporary file
+before chmod; Windows ACL hardening and keychain integration are not implemented here.
 
-🔴 **`0600` agora é criado e conferido** (0.11.9, achado F-06). Até a 0.11.8 esta doc e o
-README prometiam `0600` e "keychain se der", e **nenhum dos dois existia**: não havia
-comando que escrevesse o config, então o usuário o criava à mão com o umask dele —
-tipicamente `0644`, legível por qualquer conta da máquina — e a leitura não dizia nada.
-Promessa de permissão que ninguém cria nem confere é pior que silêncio, porque quem leu a
-doc acredita que está protegido.
+The REPL autosaves retained message history to `~/.shvia-code/sessions/`, with best-effort
+Unix directory/file permissions. This is not a complete immutable transcript or a
+project-bound session registry. One-shot and NDJSON paths do not use this autosave.
+Retention is manual (`sessions clear [--older-than DAYS]`), based on file modification
+time. Statistics read this local store and cannot represent every external host run.
 
-- `anna config set-key [CHAVE]` grava com `0600`, preservando o resto do arquivo (escreve
-  num temporário no mesmo diretório, põe a permissão **antes** e renomeia — `rename` é
-  atômico, e criar em `0644` para ajustar depois abriria uma janela com a chave legível).
-  **Sem argumento, lê do stdin** — que é o modo que não deixa a chave no histórico do
-  shell nem na lista de processos.
-- Ao carregar, se o arquivo **tem `api_key`** e a permissão é frouxa, sai um aviso com o
-  modo e o comando para consertar. Só com chave dentro: avisar num config sem chave
-  treinaria o dev a ignorar o aviso, que é como uma guarda morre.
-- **Keychain continua não existindo.** A menção saiu da doc em vez de continuar prometida.
-**Sessões** em `~/.shvia-code/sessions/<id>.json` (0600, 0700 na pasta):
-histórico do turno + metadados; `anna sessions {list|resume <id>|clear}`. Nunca
-sobem ao servidor (D7). Transcript não guarda a API key.
+Checkpoints use a temporary Git index and `refs/anna/checkpoint`, with a 30-second
+snapshot debounce; restoring is an explicit REPL action. New post-snapshot files remain,
+and the legacy checkout fallback may affect the real index. Checkpoints do not cover
+all shell effects or replace backups.
 
-### Retenção (0.11.9, achado F-07)
+Optional `AI_MEMORY_URL` exports best-effort prompt/tool/session hooks to a separate
+service. HTTPS is required except on loopback. The hook sends full tool arguments and
+truncated results; it is not retrieval or synchronization of the local session files.
 
-O que fica ali é o **histórico inteiro**, inclusive `role=tool` — ou seja, tudo que o
-`read_file` leu, e a última imagem em base64 da sessão. Em `0600`, mas **sem prazo**: a
-única limpeza era `anna sessions clear`, tudo ou nada. Quem quer manter o trabalho da
-semana e não quer o `.env` lido há três meses não tinha o que fazer.
+## 6. Execution modes
 
-```bash
-anna sessions clear --older-than 30   # só as sem uso há mais de 30 dias
-anna sessions clear                   # todas, como antes
-```
+| Mode | Tools/approval | Conversation lifetime |
+|---|---|---|
+| Terminal REPL | Local tools with terminal gates | In memory, ordinary-turn local autosave |
+| Terminal `-p` | Automatic tools run; confirmation gates refuse | One process, no autosave |
+| `--json` / `--json -p` | Local tools; host answers NDJSON gates, including writes | Process memory; host must persist if desired |
+| `--json --tools host` | Only shell proposals; host owns execution/security | Process memory; host owns persistence |
 
-O corte usa o **`mtime` do arquivo**, e não um campo de data: `Session` não tem carimbo, e
-acrescentar um só valeria para as sessões novas — justamente as que não interessam a uma
-limpeza por idade. Arquivo sem `mtime` legível é **preservado**; numa operação que apaga, a
-dúvida vota em não apagar. Pelo mesmo motivo, um `--older-than` absurdo devolve zero em vez
-de estourar a aritmética (encontrado por teste, não por leitura).
+There is no `--allow-writes`. `--tools host` alone does not switch execution to a host.
+JSON mode does not interpret terminal slash-commands. See [embedding](embedding.md)
+for the protocol, stdin waiting behavior and error/completion limitations.
 
-### Memória de longo prazo exige URL segura (0.11.9, achado F-07)
+## 7. Roadmap versus implementation
 
-O hook do `ai-memory` manda `bearer_auth` + prompts + 400 chars de cada resultado de tool.
-`AI_MEMORY_URL` aceitava **qualquer** esquema: em `http://` para fora do loopback, isso é
-token e conteúdo de trabalho em claro na rede.
+C1–C3's reads, gated edits/shell/Git, session resume, model switching and rendering are
+present. Distribution includes source install, Windows Actions artifacts and a static
+Linux Release asset workflow. NDJSON embedding, host delegation, task lists and the
+planning pipeline also exist; they must not all remain labeled C5 future work.
 
-Agora vale a **mesma** regra do `SHVIA_URL` — `config::url_seguro`, importada e não
-recopiada (ela já tem prova, incluindo `http://localhost@atacante.tld` e
-`http://127.0.0.1.atacante.tld`; uma segunda cópia divergiria). URL insegura **desliga a
-memória com aviso**, em vez de recusar o boot: memória é opcional, e derrubar a ferramenta
-por causa de um hook mal configurado trocaria um vazamento por uma indisponibilidade.
+**Proposed, not implemented:** `anna models`/`anna infras` and matching slash-commands,
+favorites/catalog browsing, ShvIA skills/RAG integration, MCP tools, structured test
+execution, OS sandboxing, parallel agents and NDJSON planning-pipeline gates. The earlier
+catalog proposal used Web endpoints; their current availability/authorization needs
+verification in ShvIA Web before implementing a client. Preserve the original scope in
+[.continue](../.continue/escopo-projeto.md) as a design record.
 
-## 6. Modos de execução
+## 8. Verification
 
-- **Interativo** (default): `anna` na raiz do projeto → REPL com cabeçalho
-  (projeto/git/modelo·infra), streaming, `/model`, `/sessions`, `/help`.
-- **Não-interativo**: `anna -p "corrige o lint e roda os testes"` → roda o loop e
-  sai (código de saída = sucesso/falha). Base pra CI (C5). Nele, gates de escrita/
-  bash **negam por padrão** salvo `--allow-writes`/allowlist explícita.
-
-## 7. Roadmap de implementação (dentro das fases do escopo)
-
-- **C1**: `main/cli/config/api(sse,types)/agent/tools(fs,guard)/gate(read-only)/
-  project/ui(repl)/render/telemetry`. Tools só de leitura. Já conversa e explica.
-- **C2**: `tools/edit,shell,git` + gates de escrita/confirm/destrutivo + `similar`.
-- **C3**: `session` resume, `/model`, `ui/tui` opcional, ANNA.md.
-- **C4**: `build-local.sh` (feito) + binários + checksums + dogfood.
-- **C5 (future)** — items as they are approved:
-  - **Listing infras and models** (proposed 29/09/2026). Nothing in `anna` shows what can be
-    used today: `/model` with no argument prints only the current profile, and `/model x`
-    accepts any string unchecked, so a stale default or a typo comes back from the gateway as
-    a routing error. Seen on 29/09/2026: `deepseek/deepseek-v3.2` was the pinned model, it
-    exists only on `kilo`, and the CLI could not say so.
-    - **Infras.** List the infras the user can actually use — enabled (`disabled: false`) and
-      with an API configured (`api_key_configured`) — with their status (`online`), data
-      locality (`data_locality`) and model count. Suggested surface: `anna infras` and
-      `/infras`. Disabled or keyless infras stay out of the default view; `--all` shows them
-      with the reason.
-    - **Models.** List per infra, the user's favorites first (`is_favorite`, the list stored on
-      the account through `PUT /api/v1/me/favorite-models`), and `--all` for the full
-      catalogue — `kilo` and `openrouter` have 390+ models each. Each line is the exact
-      `model@infra` string that `--model` and `/model` take. Suggested surface:
-      `anna models [infra]` and `/models [infra]`.
-    - **Data.** No server work: `GET /api/v1/servers` and `GET /api/v1/profiles` already answer
-      to an API key (`auth:sanctum,apikey`, no ability gate) and carry every field above. Only
-      the client is missing. `/profiles` is about 640 KB for roughly 1000 profiles, so fetch it
-      once per command and filter client-side; both routes share the 60/min bucket.
-
-## 8. Testes
-
-- Unit: `guard` (denylist/confinamento), `shell` (classificação destrutivo/
-  allowlist), `sse` (parse de frames parciais), `edit` (unicidade do old_string).
-- Integração: um **mock do gateway** (servidor SSE de teste) exercitando o loop
-  fechado — sem depender do servidor real. **Ainda não existe** (02/09/2026): o
-  loop fechado só é exercitado à mão, contra o gateway real. Até aqui a frase
-  dizia que o `spikes/c0-gateway.php` era "a referência viva do protocolo até
-  lá" — era um cliente PHP de 08/07 que nada rodava, e foi removido (F-10). A
-  referência do protocolo é `src/api.rs`, que o CI compila e testa.
+`cargo test --locked` exercises the Rust tests, including the module inventory in this
+section and the AGENTS/CLAUDE mirror. It does not contain a full mock-gateway closed-loop
+integration suite. A passing local build is not proof of provider tool-calling quality,
+installed terminal acceptance or packaged-host behavior. See the
+[review](DOCUMENTATION-REVIEW-20261015.md) for source findings and checks obtained.

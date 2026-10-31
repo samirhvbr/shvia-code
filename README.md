@@ -1,97 +1,108 @@
-# SHVIA-CODE
+# ShvIA Code — `anna`
 
-CLI agêntico de código da Blue3 — comando **`anna`** (Rust). A experiência do
-Claude Code, movida pelo **gateway do ShvIA** (`ai.shvia.org`): a Anna lê
-arquivos, propõe diffs, edita, roda comandos e commita — **com aprovação** — no
-projeto em que o dev está, usando qualquer perfil de modelo do ShvIA (on-prem
-ou nuvem BYOK).
+ShvIA Code is the Rust coding agent used from a terminal or embedded in a ShvIA host.
+The executable is named **`anna`**; the coding agent has no Anna chat persona. It sends
+conversation and tool definitions to the ShvIA gateway at `POST /api/v1/code/chat` and
+executes approved tools on the machine running it, or delegates execution to its host.
+The gateway selects the configured model and provider; this repository does not run a
+model server.
 
-> Antes de mexer: **`git pull`**. Convenções em [CLAUDE.md](CLAUDE.md) ·
-> Escopo aprovado e fases em [.continue/escopo-projeto.md](.continue/escopo-projeto.md) ·
-> Decisões em [docs/decisoes.md](docs/decisoes.md).
+**Current scope:** terminal REPL, one-shot prompts, file/search/edit/shell/Git tools,
+task lists, local sessions and statistics, Git checkpoints, a terminal planning pipeline,
+and NDJSON integration. [Current architecture](docs/arquitetura-cli.md),
+[user guide](docs/USER-GUIDE.md), and [documentation index](docs/README.md) describe
+the implemented behavior. The original C0–C5 scope in
+[`.continue/escopo-projeto.md`](.continue/escopo-projeto.md) is a planning record, not a
+current feature checklist.
 
-## Status
+This documentation review inspected source and local checks. It does not certify a live
+gateway round trip, installed terminal experience, packaged Desktop integration, or
+deployment. See [review evidence and open findings](docs/DOCUMENTATION-REVIEW-20261015.md).
 
-**C1–C3 no código (0.3.x)** — o `anna` lê, edita (diff+confirmação), roda `bash`
-(com gates), commita, retoma **sessões**, troca de modelo (`/model`) e responde
-em markdown. Em 0.9.0 entra o **pipeline de papéis** (`/plano` —
-[orquestrador.md](docs/orquestrador.md)): arquiteto → você aprova → executor →
-revisão. `cargo clippy -D warnings` limpo, 51 testes verdes. **Falta só o
-smoke ao vivo** (precisa de `SHVIA_API_KEY` + gateway 2.16.0) pra provar o loop
-de ponta a ponta contra um modelo real — inclusive o `/plano`, que até aqui só
-foi exercitado nos testes de contrato (parse/validação/só-leitura), nunca contra
-um modelo.
+## Install
 
-## Instalar
+On macOS or Linux, install Rust and `cargo-audit`, then:
 
-```bash
-git clone git@github.com:samirhvbr/SHVIA-CODE.git && cd SHVIA-CODE
-./install.sh                    # preflight + build release + copia p/ ~/.local/bin
-export SHVIA_API_KEY=<sua-chave-do-ShvIA>
+```sh
+git clone git@github.com:samirhvbr/shvia-code.git
+cd shvia-code
+./install.sh
 ```
 
-Precisa de Rust (`rustup`) e do `cargo-audit` (`cargo install cargo-audit`) — o `install.sh` avisa se faltar algo. **The install stops on a dependency vulnerability** (since 0.12.0; the owner's choice, finding f165), and also when `cargo-audit` is missing, because an audit that did not run must not pass for one that did. A chave vem de
-`SHVIA_API_KEY` ou `~/.config/shvia-code/config.toml` — **nunca** por argumento de
-CLI. Para gravá-la no arquivo com `0600`, use `anna config set-key` (sem argumento
-ele lê do stdin, e assim a chave não fica no histórico do shell). Se o arquivo tiver
-chave e permissão frouxa, o `anna` avisa ao carregar. `anna config` mostra o estado
-resolvido.
+The installer runs the strict dependency audit and a release build, then copies `anna`
+to `~/.local/bin` or `ANNA_BIN_DIR`. Add that directory to `PATH` if needed. Missing
+`cargo-audit` or a reported vulnerability stops installation. The script does not update
+the checkout for you. [Build and distribution](docs/DEVELOPMENT.md) explains checks,
+checksums, platform requirements, and how release publication differs from installation.
 
-**Linux binary, no toolchain.** Since 0.13.2 every Release carries
-`anna-x86_64-unknown-linux-musl`, a static binary built by
-`.github/workflows/linux-binary.yml`, and its `.sha256`. It is what the ShvIA
-Workspace installs to run the engine in a project's runner container; it runs on any
-x86_64 Linux. Check it before running it:
+The Linux release workflow builds `anna-x86_64-unknown-linux-musl` and its `.sha256`
+for x86_64 Linux. Download both from the same [release](https://github.com/samirhvbr/shvia-code/releases)
+and verify with `sha256sum -c anna-x86_64-unknown-linux-musl.sha256` before installation.
+A Windows workflow produces an `anna.exe` **Actions artifact**; that is a separate path
+from GitHub Release assets. Shell tools require `sh`, including on Windows.
 
-```bash
-sha256sum -c anna-x86_64-unknown-linux-musl.sha256
+## Configure and use
+
+Use a revocable ShvIA user API key, not Laravel's `APP_KEY`. Provide it through
+`SHVIA_API_KEY`, or enter it through stdin with:
+
+```sh
+anna config set-key
+anna config
 ```
 
-## Usar
+`anna config` reports the resolved settings and configuration path without printing the
+key. The configuration directory follows the operating system; `~/.config/shvia-code`
+is the usual Linux path, not a portable path for every platform. The setter applies
+`0600` on Unix; the [security guide](SECURITY_GUIDELINES.md) states its limits.
 
-```bash
-cd ~/meu-projeto
-anna                            # REPL: pergunte, edite, rode, commite (com aprovação)
-anna -p "onde está o bug no cálculo de boleto?"   # uma pergunta, não-interativo
-anna --model "modelo@servidor"  # perfil específico  ·  /model troca no meio
-anna sessions list|resume <id>|clear              # retomar de onde parou
-anna stats                      # dashboard de uso (Wrapped) — 100% local
-anna stats --html --open        # exporta a página HTML e abre no navegador
+Run from the project you intend the tools to use:
+
+```sh
+anna
+anna -p "Explain the failing calculation and cite the relevant files"
+anna --model "model@server" --effort high
+anna sessions list
+anna sessions resume SESSION_ID
+anna stats --tab models --range 30d
+anna stats --html --open
 ```
 
-Comandos do REPL: `/help` · `/plano <pedido>` · `/model [perfil]` · `/sessions` · `/stats` · `/tools` · `/clear` · `/exit`.
+The profile string must exist on your gateway. There is currently no `anna models` or
+`/models` catalog browser. Flags, environment precedence, role configuration and all
+commands are in the [user guide](docs/USER-GUIDE.md).
 
-**Aprovações.** Escrita e comando mostram o que vai acontecer (o diff, com número de linha e fundo
-vermelho/verde) e perguntam num menu: setas + Enter, ou `1`/`2`/`3`, ou `s`/`t`/`n`. Esc e Ctrl-C
-recusam. O comando destrutivo abre com o cursor em "Não". Sem terminal (pipe, `-p`) a pergunta volta a
-ser uma linha no stdin, e o `-p` continua negando escrita.
+The REPL supports `/help`, `/model`, `/sessions`, `/stats`, `/tools`, `/clear`,
+`/plano <request>`, `/rollback`, `/rollback aplicar`, and `/exit`. `/plano` runs an
+architect → human approval → executor → verification/reviewer pipeline with separate
+role profiles; it is available in the terminal, not as an NDJSON slash-command.
 
-**Cor.** O `anna` só escreve cor quando a saída é um terminal: em pipe ou redirecionamento
-(`anna -p "…" | tee log`) saem as mesmas palavras, sem códigos de escape. `NO_COLOR=1` desliga
-sempre; `FORCE_COLOR=1` liga mesmo em pipe.
+Writes display a diff and require approval. Shell commands are classified as automatic,
+confirmation required, or destructive/always confirm. Session approval applies to a
+tool scope. **This is an approval system, not an operating-system sandbox:** an approved
+shell command runs with the account's permissions. One-shot terminal `-p` refuses
+confirmation gates, while automatic tools still run. `--json -p` can ask its host for
+approval and must not be treated as a read-only mode.
 
-O **[`/plano`](docs/orquestrador.md)** roda a tarefa como pipeline de papéis em
-vez de um modelo fazendo tudo: o **arquiteto** (só leitura) propõe um plano
-arquivo-a-arquivo, **você aprova ou não**, o **executor** aplica passo a passo
-(com os gates de diff de sempre) e a revisão fecha — primeiro clippy/testes, e só
-depois um **revisor** que julga o diff contra o plano. Cada papel tem perfil e
-esforço próprios (`[elenco]` no `config.toml`, `anna config` mostra a tabela) e o
-custo sai discriminado por papel no fim.
+## Embed and integrate
 
-O **[`anna stats`](docs/stats.md)** é a tela _wrapped_ ("O que vem a seguir,
-&lt;você&gt;?"): sessões, mensagens, tokens, dias ativos, sequência, horário de
-pico, modelo favorito e um heatmap de contribuição — no terminal ou exportado em
-HTML (abas Visão Geral/Modelos + filtros 7d/30d ao vivo). Lê só
-`~/.shvia-code/sessions/`, sem tocar no gateway.
+`anna --json` exposes the same agent loop as newline-delimited JSON over stdin/stdout.
+It keeps conversation in the running process, without the REPL's session autosave.
+With `--json --tools host`, it proposes only `bash` calls and waits for the host's
+execution result; the host owns approval and execution policy.
+[Embedding](docs/embedding.md) documents events, decisions, images, and lifecycle.
 
-## Desenho em uma linha
+ShvIA Desktop can package the engine, and ShvIA Workspace can install the static Linux
+binary in a runner. Their routing, installation, UI, and remote execution live in their
+own repositories. Optional `AI_MEMORY_URL` enables a separate best-effort hook that
+sends prompts and tool information to an ai-memory service; it is disabled when unset.
 
-Loop agêntico **no cliente** (tools executam na máquina do dev, com gates), SSE
-contra o gateway do ShvIA (auth por API key) — auditoria, quotas, custo e LGPD
-herdados do servidor.
+## Contribute
 
-## Fases
-
-C0 spike do gateway → **C1 leitura ✓** → **C2 mãos (edit/bash/git) ✓** → **C3
-ergonomia (sessões, `/model`, markdown) ✓** → **C4 distribuição (`install.sh` +
-dogfood) ▸ em curso** → C5 skills/RAG/CI/SShvTerm.
+Work on a branch and propose a PR; do not publish directly to the default branch.
+Follow [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md) and
+[development guidance](docs/DEVELOPMENT.md). Documentation and GitHub contributions
+use English (US). Keep `version.md`, the `anna` package in `Cargo.toml`/`Cargo.lock`,
+and the first changelog heading aligned, including documentation-only version bumps.
+Merging, publishing release assets, installing, and verifying a live gateway remain
+separate steps.

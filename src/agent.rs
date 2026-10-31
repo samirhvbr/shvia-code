@@ -14,66 +14,106 @@ use crate::telemetry::Telemetry;
 use crate::types::Message;
 use anyhow::Result;
 
-// ── Teto de histórico por requisição ──────────────────────────────────────────
-// O gateway (`/code/chat`, SHVIA-WEB) valida `messages` com `max:200` — teto
-// anti-abuso das SECURITY_GUIDELINES §3.3. Estourar não degrada: o gateway
-// REJEITA a requisição inteira ("must not have more than 200 items") e a sessão
-// fica PRESA — cada retry reenvia o mesmo histórico gigante (caso real de
-// 18/08/2026: sessão longa no MiniMax M3, 26M tokens, sem saída além de zerar o
-// chat). Compactamos client-side ANTES de cada envio: o dono do histórico é o
-// anna, e o corte determinístico aqui é barato e auditável (nenhuma chamada de
-// modelo para resumir).
-/// Compacta em COMPACTA_EM (folga sob o teto de 200 do gateway: as voltas do
-/// turno somam assistant+tools entre um trim e o próximo, e 50 de folga cobre
-/// isso com sobra — o pior caso real é ~33 mensagens por volta).
+// ── Per-request history ceiling ───────────────────────────────────────────────
+// The gateway (`/code/chat`, SHVIA-WEB) validates `messages` with `max:200`, the
+// anti-abuse ceiling of SECURITY_GUIDELINES §3.3. Going over does not degrade: the
+// gateway REJECTS the whole request ("must not have more than 200 items") and the
+// session gets STUCK, because every retry resends the same oversized history (real
+// case, 18/08/2026: a long MiniMax M3 session, 26M tokens, no way out but clearing
+// the chat). So the history is compacted client-side BEFORE each send: anna owns the
+// history, and a deterministic cut here is cheap and auditable (no model call to
+// summarise).
+//
+// 🔴 Until 0.13.6 the cut was a sliding window: once past 150 messages, EVERY round
+// dropped the 2–4 oldest, so the person saw "histórico compactado" on every round,
+// and each round's request started with a different prefix. And only the leading
+// `system` messages were protected, so in a long turn the person's own request fell
+// out of the context. The marker then told the model to re-verify with tools, the
+// re-reads added messages, and the next round cut again. Seen on 31/10/2026 in the
+// owner's Desktop session on MiniMax M3.1 Flash: a compaction notice before almost
+// every tool call, the same three worktrees' `git diff` read twice each, and the
+// 100-round ceiling reached at 153 tools and 4.47M tokens.
+/// Compaction starts when the history goes over COMPACTA_EM (headroom under the
+/// gateway's 200: the worst real case is ~33 messages in one round).
 const COMPACTA_EM: usize = 150;
-/// Prefixo que identifica o marcador de compactação (para substituí-lo, nunca
-/// acumular um por trim).
+/// ...and cuts down to COMPACTA_PARA, so the next cut is ~25 rounds away instead of
+/// on the next round, and the prefix the provider receives stays the same between
+/// cuts.
+const COMPACTA_PARA: usize = 100;
+/// Prefix that identifies the compaction marker (so it is replaced, never piled up
+/// one per cut).
 const MARCADOR: &str = "[Contexto compactado]";
 
-/// Reduz `messages` para caber no teto do gateway, preservando:
-/// - os `system` INICIAIS (o prompt-semente do agente e o contexto do projeto);
-/// - as mensagens mais RECENTES, com a janela nunca começando em `role=tool`
-///   (um resultado de ferramenta sem o assistant que o pediu é órfão — provedor
-///   OpenAI-strict rejeita e qualquer modelo se perde);
-/// - um único marcador `system` no ponto do corte, avisando o modelo do trecho
-///   ausente (sem isso ele "lembra" do que não está mais lá e alucina).
+fn eh_marcador(m: &Message) -> bool {
+    m.role == "system" && m.content.starts_with(MARCADOR)
+}
+
+/// Shrinks `messages` to fit the gateway's ceiling, keeping:
+/// - the INITIAL `system` messages (the agent's seed prompt and project context);
+/// - the person's requests that anchor the work: the FIRST `user` message of the
+///   session and the LATEST one. A turn that the person resumed with "continua", or
+///   that the Run continued with the orchestrator's message, would otherwise keep
+///   only the continuation and lose what it is continuing;
+/// - the most RECENT messages, with the window never starting at `role=tool` (a tool
+///   result without the assistant that asked for it is an orphan: an OpenAI-strict
+///   provider rejects it and any model gets lost);
+/// - a single `system` marker at the cut, telling the model a stretch is missing
+///   (without it, the model "remembers" what is no longer there and hallucinates).
 ///
-/// Devolve quantas mensagens saíram (0 = nada a fazer).
+/// Below COMPACTA_EM nothing changes, including the marker of an earlier cut.
+/// Returns how many messages left (0 = nothing to do).
 fn compactar_historico(messages: &mut Vec<Message>) -> usize {
-    // Marcador de compactação anterior sai antes da conta: ele é re-inserido no
-    // corte novo (senão acumularia um marcador por trim, todos "verdadeiros").
-    messages.retain(|m| !(m.role == "system" && m.content.starts_with(MARCADOR)));
     if messages.len() <= COMPACTA_EM {
         return 0;
     }
 
-    // Cabeça = a sequência de `system` do INÍCIO (prompt-semente + contexto).
-    // System no meio do histórico (ex.: nudge de loop) conta como conversa.
-    let cabeca = messages.iter().take_while(|m| m.role == "system").count();
+    // Head = the run of `system` messages at the START (seed prompt + context). A
+    // `system` in the middle of the history (e.g. a loop nudge) counts as conversation.
+    let cabeca = messages.iter().take_while(|m| m.role == "system" && !eh_marcador(m)).count();
 
-    // Janela = as mais recentes que cabem, deixando 1 vaga para o marcador.
-    let orcamento = COMPACTA_EM.saturating_sub(cabeca + 1).max(1);
+    // Window = the most recent messages that fit in COMPACTA_PARA, leaving room for
+    // the marker and the two kept requests.
+    let orcamento = COMPACTA_PARA.saturating_sub(cabeca + 3).max(1);
     let mut corte = messages.len().saturating_sub(orcamento).max(cabeca);
-    // Nunca começar a janela num resultado de ferramenta órfão.
+    // Never open the window on an orphan tool result.
     while corte < messages.len() && messages[corte].role == "tool" {
         corte += 1;
     }
 
-    let removidas = corte - cabeca;
+    let primeiro_pedido = (cabeca..corte).find(|&i| messages[i].role == "user");
+    let ultimo_pedido = (cabeca..messages.len()).rev().find(|&i| messages[i].role == "user");
+    let mut mantidos: Vec<usize> =
+        [primeiro_pedido, ultimo_pedido].into_iter().flatten().filter(|&i| i < corte).collect();
+    mantidos.dedup();
+
+    let removidas = (cabeca..corte)
+        .filter(|&i| !eh_marcador(&messages[i]) && !mantidos.contains(&i))
+        .count();
     if removidas == 0 {
         return 0;
     }
-    messages.drain(cabeca..corte);
-    messages.insert(
-        cabeca,
-        Message::system(format!(
-            "{MARCADOR} {removidas} mensagens antigas desta sessão saíram do contexto para \
-             caber no teto por requisição do gateway. Há um trecho ausente entre as mensagens \
-             acima e abaixo deste marcador — NÃO presuma o que estava nele: use as ferramentas \
-             (read_file, grep, git_diff) para reverificar o que precisar."
-        )),
-    );
+
+    let tem_pedido = messages[cabeca..].iter().any(|m| m.role == "user");
+    let pedidos = if tem_pedido {
+        " O primeiro pedido do usuário nesta sessão e o mais recente continuam no \
+         contexto (acima deste marcador ou nas mensagens recentes)."
+    } else {
+        ""
+    };
+    let marcador = Message::system(format!(
+        "{MARCADOR} {removidas} mensagens antigas desta sessão saíram do contexto para \
+         caber no teto por requisição do gateway.{pedidos} Continue de onde as mensagens \
+         recentes param. NÃO presuma o que estava no trecho ausente, mas também não refaça \
+         o que as mensagens recentes já mostram: use as ferramentas (read_file, grep, \
+         git_diff) só para o que o próximo passo precisa e não está aqui."
+    ));
+
+    let mut janela: Vec<Message> = messages.drain(corte..).filter(|m| !eh_marcador(m)).collect();
+    let pedidos_mantidos: Vec<Message> = mantidos.iter().map(|&i| messages[i].clone()).collect();
+    messages.truncate(cabeca);
+    messages.extend(pedidos_mantidos);
+    messages.push(marcador);
+    messages.append(&mut janela);
     removidas
 }
 
@@ -113,7 +153,7 @@ pub async fn run_turn(
         if compactadas > 0 {
             fe.warn(&format!(
                 "histórico compactado: {compactadas} mensagens antigas saíram do contexto \
-                 (teto do gateway); o modelo foi avisado do corte."
+                 (teto do gateway); seus pedidos ficaram e o modelo foi avisado do corte."
             ));
         }
         fe.waiting();
@@ -186,10 +226,75 @@ mod tests {
         assert!(removidas > 0);
         assert!(m.len() <= COMPACTA_EM, "ficou com {} (> {COMPACTA_EM})", m.len());
         assert_eq!(m[0].content, "prompt-semente", "system-semente tem que sobreviver");
-        assert!(m[1].content.starts_with(MARCADOR), "marcador no ponto do corte");
+        assert_eq!(m[1].content, "pergunta 0", "the session's first request stays");
+        let marcador = m.iter().position(eh_marcador).expect("marker at the cut");
         assert_eq!(m.last().unwrap().content, ultima, "as recentes ficam");
         // A janela nunca começa num resultado de ferramenta órfão.
-        assert_ne!(m[2].role, "tool", "janela não pode abrir em role=tool");
+        assert_ne!(m[marcador + 1].role, "tool", "janela não pode abrir em role=tool");
+    }
+
+    /// One round of a turn, as `run_turn` appends it: the assistant asking for a
+    /// tool, then the tool's result.
+    fn volta(m: &mut Vec<Message>, i: usize) {
+        m.push(Message::assistant(format!("chamando tool {i}"), vec![]));
+        m.push(Message::tool(format!("id-{i}"), format!("saida {i}")));
+    }
+
+    fn tem(m: &[Message], role: &str, content: &str) -> bool {
+        m.iter().any(|x| x.role == role && x.content == content)
+    }
+
+    #[test]
+    fn o_pedido_sobrevive_a_um_turno_longo_e_ao_continua() {
+        // The 31/10/2026 case: one request, a long turn, the 100-round ceiling,
+        // "continua", and another long turn. Compaction runs before every round, as
+        // in `run_turn`. Before 0.13.6 the request left the context at ~75 rounds.
+        let mut m = vec![Message::system("prompt-semente"), Message::user("corrija o parcelamento")];
+        for i in 0..100 {
+            compactar_historico(&mut m);
+            assert!(tem(&m, "user", "corrija o parcelamento"), "request lost at round {i}");
+            volta(&mut m, i);
+        }
+        m.push(Message::user("continua"));
+        for i in 100..200 {
+            compactar_historico(&mut m);
+            assert!(m.len() <= 200, "round {i} would send {} messages", m.len());
+            assert!(tem(&m, "user", "corrija o parcelamento"), "request lost at round {i}");
+            assert!(tem(&m, "user", "continua"), "the latest request lost at round {i}");
+            volta(&mut m, i);
+        }
+        assert_eq!(m[0].content, "prompt-semente");
+        assert_eq!(m.iter().filter(|x| eh_marcador(x)).count(), 1, "one marker");
+    }
+
+    #[test]
+    fn compacta_de_vez_em_quando_nao_a_cada_volta() {
+        // 300 rounds of 2 messages each. A sliding window cut on every round past
+        // 150 messages (~225 notices); cutting down to COMPACTA_PARA leaves ~25
+        // rounds between cuts: the first at round ~75, then 8 more.
+        let mut m = vec![Message::system("prompt-semente"), Message::user("pedido")];
+        let mut cortes = 0;
+        for i in 0..300 {
+            if compactar_historico(&mut m) > 0 {
+                cortes += 1;
+                assert!(m.len() <= COMPACTA_PARA, "cut to {} (> {COMPACTA_PARA})", m.len());
+                // The very next round has nothing to cut.
+                volta(&mut m, i);
+                assert_eq!(compactar_historico(&mut m), 0, "cut again right after a cut");
+            } else {
+                volta(&mut m, i);
+            }
+        }
+        assert!((5..=12).contains(&cortes), "{cortes} cuts in 300 rounds");
+    }
+
+    #[test]
+    fn abaixo_do_teto_o_marcador_de_um_corte_anterior_fica() {
+        let mut m = sessao(400);
+        assert!(compactar_historico(&mut m) > 0);
+        volta(&mut m, 1000);
+        assert_eq!(compactar_historico(&mut m), 0);
+        assert_eq!(m.iter().filter(|x| eh_marcador(x)).count(), 1, "the marker must stay");
     }
 
     #[test]

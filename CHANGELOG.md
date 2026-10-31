@@ -3,7 +3,7 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
-## 0.13.5 - Preserve final assistant answers in conversation history
+## 0.13.8 - Preserve final assistant answers in conversation history
 
 The agent displayed final answers but only added assistant messages with tool calls
 to its history. A follow-up such as "use your previous answer" therefore reached
@@ -17,6 +17,59 @@ it again. Integration tests launch the real CLI against a local SSE fixture and
 verify the next NDJSON request, terminal autosave, a resumed request, and the
 orchestrator's retry. The tests isolate the home directory on Unix; no live model
 or Windows session-store behavior is covered.
+
+## 0.13.7 - Take the patched quinn-proto, which stopped `install.sh` at its strict dependency audit
+
+`./install.sh` runs `build-local.sh --audit-strict`, and on 31/10/2026 it stopped there with "5 vulnerabilities found":
+`quinn-proto` 0.11.16 in `Cargo.lock` has RUSTSEC-2026-0338, -0339, -0340, -0341 and -0342 (two of them 7.5 high). The
+owner hit it installing 0.13.6 on the Linux build machine, which the Desktop needs since its `anna` floor moved to 0.13.6.
+
+- `cargo update -p quinn-proto`: 0.11.16 → 0.11.19, the only package the lock moves.
+- `quinn-proto` is not compiled into `anna`: `cargo tree -i quinn-proto --target all --all-features` prints nothing. It sits
+  in the lock as `reqwest`'s optional HTTP/3 dependency, and `cargo audit` reads the lock, not the build graph.
+- After the update, `cargo audit` reports no vulnerability (the two yanked warnings, `chacha20` and `clipboard-win`, are
+  allowed and do not stop the install) and `cargo deny check advisories` is ok.
+
+## 0.13.6 - Keep the person's requests through history compaction, and compact once every ~25 rounds instead of on every round
+
+The loop compacts the history before each request so it stays under the gateway's 200-message
+limit. Until now it slid a 150-message window: past that size, every round dropped the 2–4 oldest
+messages, and only the leading `system` messages were protected. Seen on 31/10/2026 in a Desktop
+session on MiniMax M3.1 Flash: a "histórico compactado" notice before almost every tool call, the
+same three worktrees' `git diff` read twice each, and the 100-round ceiling reached at 153 tools
+and 4.47M tokens.
+
+- **The request survives.** The session's first `user` message and the latest one stay in the
+  context. A turn resumed with "continua", or continued by the Run's orchestrator, used to keep
+  only the continuation; the new test measures the old loop losing the request at round 75.
+- **Compaction is rare.** Past 150 messages the history is cut down to 100, so the next cut is
+  ~25 rounds away: in the test's 300 rounds of one tool each, nine cuts instead of one per round
+  past round 75. The prefix the provider receives stays the same between cuts.
+- **The marker stays between cuts.** A history at or below 150 is left alone, including the
+  earlier cut's marker; 0.13.5 removed the marker before counting, so a history that shrank to
+  150 could lose the note that a stretch was missing.
+- **The marker no longer sends the model back over its own work.** It says the requests are still
+  there, to continue from the recent messages, and to use tools only for what the next step needs
+  and is not in view. The notice to the person says the requests were kept.
+- Tests: `o_pedido_sobrevive_a_um_turno_longo_e_ao_continua`, `compacta_de_vez_em_quando_nao_a_cada_volta`
+  and `abaixo_do_teto_o_marcador_de_um_corte_anterior_fica`. Reversals, each red: without keeping
+  the requests (request lost at round 75), without keeping the latest one ("continua" lost at
+  round 155), with a cut down to 150 (cuts again on the next round), and with the marker removed
+  before the count (marker lost).
+- `docs/protocolo.md`, `docs/USER-GUIDE.md` and `docs/arquitetura-cli.md` state the new numbers.
+
+## 0.13.5 - Document the current CLI and its execution boundaries
+
+- Replace the early-MVP README with the implemented terminal, NDJSON, host-runner,
+  planning, task-list, session, checkpoint, statistics and optional-memory surfaces.
+- Add a documentation index, command/configuration guide and development/distribution
+  guide; reconcile architecture, security, embedding and dated design records with source.
+- Correct the short agent context's obsolete direct-master and Portuguese-publication
+  instructions; preserve generated fleet rules and unimplemented queue plans.
+- Record source-inspection findings for a separate implementation decision. No Rust,
+  shell or workflow logic changes. Synchronize version carriers as required for docs.
+- Qualify the findings after independent review: ignore/hidden rules versus secret
+  filtering, the protected session directory, and transport versus HTTP/SSE failures.
 
 ## 0.13.4 - Take the patched rustls, rustls-webpki, tokio and webpki-roots, which turned `cargo deny` red
 

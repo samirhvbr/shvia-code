@@ -1,5 +1,11 @@
 # SHVIA-CODE — Decisões (ADRs)
 
+> **Reading these records today (2026-10-15):** dated ADR text preserves the decision
+> at that time. The executable name `anna` does not assign an Anna chat persona.
+> Both local and `--json --tools host` runners are implemented in this repo; the
+> historical ADR-002 proposal is not a claim that host integration remains unbuilt.
+> See [architecture](arquitetura-cli.md) for current boundaries and external-host proof.
+
 Formato ADR. Não relitigar direção já decidida dentro de um how-to — linkar o ADR.
 
 ---

@@ -18,6 +18,13 @@ pedido → [arquiteto] → plano.json → VOCÊ aprova → [executor] → diff
                                                                  pronto
 ```
 
+> **Current boundary (2026-10-15):** implemented in the terminal only, with local
+> tools and separate role histories. Pipeline state is not durably resumable. Automatic
+> verification skips non-allowlisted/unspawnable commands with a warning and currently
+> uses a subprocess path without the shell tool's timeout. Treat successful review as
+> a model verdict, not proof that all configured checks ran. See the
+> [source findings](DOCUMENTATION-REVIEW-20261015.md).
+
 ## Por que papéis, e não um roteador
 
 A leitura fácil de "blend de modelos" é *um roteador escolhe o modelo por
@@ -109,7 +116,7 @@ volta. Dois freios:
 ## Configurar
 
 ```toml
-# ~/.config/shvia-code/config.toml
+# Use the OS-specific path reported by anna config
 profile = "seu-perfil-default"
 
 # Comandos do gate 0. Omitido = detecta pela stack (Cargo.toml → cargo
@@ -129,11 +136,9 @@ profile = "deepseek-reasoner@deepseek"   # família DIFERENTE do executor — ve
 effort  = "high"
 ```
 
-> **Os nomes acima são os reais do servidor** (conferidos em 16/08/2026 no catálogo
-> de produção, 41 perfis). O exemplo anterior desta seção usava `opus5@shvia` e
-> `sonnet5@shvia`, que **não existem** — copiar aquele bloco dava erro de
-> roteamento na primeira fase. Confira o seu com `anna config` ou no seletor do
-> ShvIA; o catálogo muda quando um provedor entra ou sai.
+> **Profile names above are historical examples, not a current catalog.** Replace
+> them with profiles currently available on your gateway. `anna config` shows the
+> configured routing but does not fetch or validate a model catalog.
 >
 > **E o revisor mudou de família de propósito.** O exemplo anterior punha
 > `opus5` no arquiteto **e** no revisor, com `sonnet5` no executor — Opus e Sonnet

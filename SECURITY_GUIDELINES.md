@@ -23,13 +23,18 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
 2. **Untrusted content (A1).** Tool output is conversation data, not permission to relax
    gates. Architectural/reviewer roles filter write/shell tools in code. Models can still
    follow malicious instructions in files; inspect proposed changes and commands.
-3. **File paths and secrets (A2).** `read_file`, `edit_file` and `write_file` check the
-   requested path against `guard::denied`; canonical path helpers constrain filesystem
-   tools to the project. The denylist includes `.env`/`.env.*` except `.env.example`,
-   private-key extensions/names, credential paths and `.git`. There is no interactive
-   override in the file tools. **Coverage is incomplete:** search/walk tools do not all
-   invoke the same denylist, and requested-name checks do not prove a canonical target
-   is nonsensitive. Do not treat ignore rules or filename filters as secret containment.
+3. **File paths and secrets (A2).** `read_file`, `grep`, `edit_file` and `write_file` check
+   the requested path **and** the real file after every symlink against `guard::denied`;
+   canonical path helpers constrain filesystem tools to the project, and a write to a name
+   that already exists follows its links and must still land inside. Until 0.13.9 the `grep`
+   tool did not apply the list at all, and a symlink inside the project reached denied files
+   (external review, 26/10/2026). The denylist includes `.env`/`.env.*` except
+   `.env.example`, private-key extensions/names, credential paths and `.git`. There is no
+   interactive override in the file tools. **Coverage is still incomplete:** `list_dir` and
+   `glob` show the names (not the contents) of denied files; recursive search in `bash`
+   (`grep -r X .`, `rg X`) stays automatic and can print a line from a denied file; and an
+   unquoted glob in a content-printing `bash` command asks, because the shell expands it
+   after the argument check. Do not treat ignore rules or filename filters as secret containment.
    An approved shell command has the user's filesystem/network access.
 4. **API key (A4).** Runtime authentication comes from nonempty `SHVIA_API_KEY` or
    `api_key` in the OS configuration directory; `anna config` reports the path and key

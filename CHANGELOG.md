@@ -3,6 +3,42 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.9 - Apply the secrets denylist to grep and to the real target of every file tool
+
+An external review (26/10/2026) found three ways around the confinement and the secrets denylist
+(SECURITY_GUIDELINES §2.3), all confirmed by running the tools against a scratch project:
+
+- **The `grep` tool never applied the denylist.** `read_file certs/server.pem` was refused, but
+  `grep SECRET` returned its lines — and those of `aws_credentials.txt`, `deploy/id_rsa` and
+  `config/app.key`. An explicit `path=".env"` also bypassed `.gitignore` and the hidden-file
+  filter. Now an explicit path on the list is refused, and denied files are skipped during the
+  walk by their real path, with one closing line saying how many were skipped.
+- **A symlink took file tools past both guards.** `resolve_new` checked only the parent folder, so
+  an approved `write_file notes.md` with `notes.md -> ../outside.txt` overwrote the outside file,
+  and the denylist saw only the requested name: `read_file readme-env.txt` (a link to `.env`)
+  returned the secret with no approval, and `edit_file hook.txt` (a link to
+  `.git/hooks/pre-commit`) rewrote a git hook. Now an existing name is resolved through its links
+  and must stay inside the project, the denylist is checked on the real file by `read_file`,
+  `grep`, `edit_file` and `write_file`, and the approval card names the real file when it differs
+  (`notes.md → docs/notes-v2.md`). A symlink already in the tree is what an untrusted repository
+  brings with it.
+- **`bash` read files through shell globs.** The argument check reads tokens literally, and the
+  shell expands globs after it: `cat .e*`, `cat certs/*` and `head -n 50 .e*` were `Auto`. Now an
+  unquoted glob (`*`, `?`, `[`, `{a,b}`) in a non-flag argument of a content-printing command asks.
+  Flags and quoted patterns do not count, and name-only commands (`ls`, `wc`, `stat`, `tree`,
+  `git ls-files`…) stay `Auto`. The price is that `grep TODO src/*.rs` now asks.
+
+Still open, and written down rather than implied: recursive search in `bash` (`grep -r X .`,
+`rg X`) stays `Auto` by an earlier decision and can print a line from a denied file; the `grep`
+tool is now the safe way to search. No `O_NOFOLLOW` open is used, so a link created between the
+check and the write — by a concurrent process, since tools run one at a time — is not covered.
+
+Tests: `grep_respeita_a_denylist`, `link_simbolico_nao_fura_o_confinamento_nem_a_denylist` (Unix)
+and `glob_sem_aspas_nao_e_automatico`. Docs: `docs/ferramentas.md`, `SECURITY_GUIDELINES.md`. Opened
+as 0.13.6 on 27/10/2026; renumbered to 0.13.9 on 31/10, after master used 0.13.5 to 0.13.7 and #13
+took 0.13.8.
+
+
 ## 0.13.8 - Preserve final assistant answers in conversation history
 
 The agent displayed final answers but only added assistant messages with tool calls

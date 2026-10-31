@@ -38,6 +38,9 @@ The requested-name denylist refuses `.env`/`.env.*` except `.env.example`, priva
 extensions/names, credential paths and `.git`; there is no interactive file-tool override.
 Canonical paths must stay in the project. The requested name and resolved target are
 separate checks; search and alias limitations are in the security guide.
+Since 0.13.9 the denylist is also checked against the file's **real path, after every
+symlink**: `readme.txt -> .env` used to be read with no approval (external review,
+26/10/2026).
 
 ### `list_dir` · gate: auto
 ```json
@@ -57,6 +60,11 @@ rules but `list_dir` explicitly enables hidden entries; this is not a secret-nam
      "glob":{"type":"string","description":"Filtro de arquivo, ex.: '*.php'."}}}}
 ```
 Resultado: `arquivo:linha: trecho` (teto de N hits; avisa se cortou). Respeita `.gitignore`.
+Since 0.13.9 it applies the same denylist as `read_file`: an explicit `path` on the list is
+refused, and files on it are skipped during the walk (by their real path), with one closing
+line saying how many were skipped. Until then `grep SECRET` returned the lines of a
+non-ignored `certs/server.pem`, and `path=".env"` bypassed `.gitignore` and the hidden-file
+filter (external review, 26/10/2026).
 
 ### `glob` · gate: auto
 ```json
@@ -85,6 +93,12 @@ o erro. Nunca escreve sem mostrar.
 ```
 Sobrescrever arquivo existente → diff contra o atual antes de confirmar. Novo →
 mostra o conteúdo. Recusa paths da denylist.
+Since 0.13.9 a name that already exists is resolved through its symlinks: the real file must
+stay inside the project and off the denylist, and the approval card names it
+(`notes.md → docs/notes-v2.md`). Until then only the parent folder was checked, so a link
+already in the tree (`notes.md -> ../outside.txt`, or `hook.txt -> .git/hooks/pre-commit`)
+took an approved write outside the project or into a git hook. `edit_file` applies the same
+check.
 
 ### `bash` · gate: **auto p/ allowlist · confirm p/ resto · always p/ destrutivo**
 ```json
@@ -112,9 +126,19 @@ mostra o conteúdo. Recusa paths da denylist.
   entre aspas, invisíveis ao scanner — mesmo critério que já mantinha o `sed` fora);
   `git branch` só é auto nas formas de leitura (`-D`/`-m` pedem cartão); `sort -o` e o
   segundo posicional do `uniq` são destino de escrita.
+- 🔴 **An unquoted glob in a command that prints file contents asks (since 0.13.9).** The
+  argument check reads tokens literally, and the shell expands globs after it: `cat .e*`,
+  `cat certs/*` and `head -n 50 .e*` were **auto** and printed `.env` and
+  `certs/server.pem` (external review, 26/10/2026). Now a non-flag word with `*`, `?`, `[`
+  or a `{a,b}` list outside quotes sends the segment to **confirm**. Flags
+  (`--include=*.rs`) and quoted patterns (`grep -n "fn .*x" src`) do not count, and
+  commands that only print names or metadata (`ls`, `wc`, `file`, `stat`, `du`, `tree`,
+  `git ls-files`…) stay auto. The price: `grep TODO src/*.rs` now asks; `grep -rn TODO src/`
+  does not.
 - **O que a guarda de argumento NÃO fecha, e está escrito para não ser confundido:** busca
   recursiva (`grep -r X .`) segue em auto e pode imprimir uma linha vinda de um `.env` do
-  projeto. Decidir por conteúdo é outra guarda, com outro custo.
+  projeto. Decidir por conteúdo é outra guarda, com outro custo. The `grep` **tool** does not
+  have this gap since 0.13.9 — it skips denied files — so it is the safe way to search.
 - **`npm run <script>`, `cargo build/test` e `make test` seguem em auto por DECISÃO:** eles
   executam o que o projeto declara (`package.json`, `Cargo.toml`, `Makefile`), e um prompt
   injetado não muda esses arquivos sem passar por `write_file`/`edit_file`, que têm cartão.
@@ -214,8 +238,11 @@ Convenções do `content`:
   `max_bytes`; it reads the whole file before slicing. Search/glob stop around 200
   matches; shell output is truncated near 32 KiB after capture. This is not a global
   output or process-memory bound.
-- Walk tools use ignore rules; they do not all share `guard::denied`. Ignore rules
-  and automatic shell classification must not be treated as a secret-containment policy.
+- Walk tools use ignore rules, and only inside a git repository: the `ignore` crate reads
+  `.gitignore` only where there is a `.git` (measured 26/10/2026), so in a plain folder an
+  ignored file is listed and searched. Since 0.13.9 `grep` also applies `guard::denied` by
+  real path; `list_dir` and `glob` list names without it. Ignore rules and automatic shell
+  classification must not be treated as a secret-containment policy.
 - Teto de voltas de tool por turno (default 100, `max_voltas`/`SHVIA_MAX_VOLTAS`)
   no loop (SECURITY §2.7) — estouro pergunta ao dev no terminal; no host encerra
   o turno com a sessão preservada ("continua" retoma).

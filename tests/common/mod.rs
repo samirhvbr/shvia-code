@@ -34,10 +34,16 @@ impl Home {
     }
 
     pub fn spawn(&self, url: &str, args: &[&str]) -> Child {
+        self.spawn_env(url, args, &[])
+    }
+
+    /// `spawn` with extra environment variables (`SHVIA_MAX_VOLTAS`, …).
+    pub fn spawn_env(&self, url: &str, args: &[&str], env: &[(&str, &str)]) -> Child {
         Command::new(env!("CARGO_BIN_EXE_anna"))
             .args(args)
             .current_dir(&self.0)
             .env_clear()
+            .envs(env.iter().copied())
             .env("HOME", &self.0)
             .env("XDG_CONFIG_HOME", self.0.join("config"))
             .env("SHVIA_URL", url)
@@ -104,6 +110,18 @@ pub fn text(answer: &str) -> Reply {
         json!({"kind": "text_delta", "data": {"delta": answer}}),
         json!({"kind": "done", "data": {"text": answer, "tool_calls": []}}),
     ])
+}
+
+/// One tool call as the gateway streams it.
+pub fn tool_call(id: &str, name: &str, arguments: Value) -> Value {
+    json!({"id": id, "name": name, "arguments": arguments})
+}
+
+/// A round that asks for these tools.
+pub fn tools(calls: Vec<Value>) -> Reply {
+    let mut evs: Vec<Value> = calls.iter().map(|c| json!({"kind": "tool_call", "data": c})).collect();
+    evs.push(json!({"kind": "done", "data": {"text": "", "tool_calls": calls}}));
+    Reply::Sse(evs)
 }
 
 /// Serves `replies` in order, one per request, and returns every request body it received.
@@ -202,7 +220,11 @@ pub struct Live {
 
 impl Live {
     pub fn start(home: &Home, url: &str) -> Self {
-        let mut child = home.spawn(url, &["--json"]);
+        Self::start_env(home, url, &[])
+    }
+
+    pub fn start_env(home: &Home, url: &str, env: &[(&str, &str)]) -> Self {
+        let mut child = home.spawn_env(url, &["--json"], env);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let (tx, events) = mpsc::channel();

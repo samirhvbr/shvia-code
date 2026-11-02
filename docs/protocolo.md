@@ -154,7 +154,10 @@ data: {"kind":"<tipo>","data":{...}}
    pergunta se continua mais um lote; host NDJSON persistente encerra o
    turno com a sessão viva (reenviar `{"type":"user","text":"continua"}`
    retoma); `-p`/`--json -p` terminam sem persistir nada — o aviso manda
-   rodar de novo com teto maior
+   rodar de novo com teto maior. Since 0.15.2, when no batch is granted, one
+   more request (the same `tools`, never `tool_choice: none`, which would change
+   the rendered prompt and its cache) asks for the turn's last word: done, left,
+   next step. Its `user` message is not kept in the history; the answer is
 ```
 
 O **servidor nunca executa ferramenta** — só devolve `tool_call`. Execução (e os

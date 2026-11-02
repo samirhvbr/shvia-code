@@ -59,7 +59,7 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
    full tool arguments and result summaries to another configured service.
 7. **Runtime limits (A6).** `max_voltas`/`SHVIA_MAX_VOLTAS` defaults to 100 model calls
    per turn, minimum 1. The interactive terminal can grant another batch; JSON ends the
-   turn with a warning. `bash_timeout`/`SHVIA_BASH_TIMEOUT` defaults to 120 seconds,
+   turn with a warning, after one closing request whose tool calls are never run (0.15.2). `bash_timeout`/`SHVIA_BASH_TIMEOUT` defaults to 120 seconds,
    with process-tree termination; 0 disables it. It applies to the shell tool, not every
    subprocess (pipeline verification uses another path). File/search/output limits vary
    by tool and are not a global memory ceiling. HTTP streams and stdin approval/result

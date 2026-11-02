@@ -12,7 +12,7 @@ use crate::memory;
 use crate::project::Project;
 use crate::runner::ToolRunner;
 use crate::telemetry::Telemetry;
-use crate::types::{Message, ToolCall};
+use crate::types::{Event, Message, ToolCall, ToolDef};
 use anyhow::Result;
 
 // ── Per-request history ceiling ───────────────────────────────────────────────
@@ -421,6 +421,65 @@ const INTERROMPIDO: &str = "[interrompido pelo usuário]";
 /// strict providers reject.
 pub const NAO_EXECUTADA: &str = "RECUSADO: o usuário interrompeu o turno antes desta ferramenta rodar.";
 
+/// Prefix of the messages `anna` itself writes into a request (not the person's words).
+const ANNA: &str = "[anna]";
+
+/// One more request for the last word of a turn that cannot go on (0.15.2): the model writes,
+/// without running tools, what it did, what is left and the next step, so the turn ends with an
+/// answer instead of being cut mid-work. Before, the round ceiling ended the turn with whatever
+/// the last round said (usually nothing: that round had asked for tools), and the person or the
+/// Run had to say "continua" with no idea where it stood.
+///
+/// Hermes does the same at its iteration cap (`handle_max_iterations`, comparison of 02/11/2026)
+/// and keeps the tools in the request on purpose: dropping them or forcing `tool_choice: none`
+/// changes the prompt the provider renders, which throws away the cached prefix (and the
+/// gateway's Ollama driver ignores `tool_choice` anyway). So the request carries the same tools,
+/// and a tool call in the answer is neither run nor shown.
+///
+/// The asking message does not stay in the history: compaction keeps the latest `user` message
+/// as the person's request, and this one is not the person's. The summary stays, as the
+/// assistant's last word of the turn. A failure here only costs the summary.
+async fn volta_de_fechamento(
+    cfg: &Config,
+    messages: &mut Vec<Message>,
+    defs: Vec<ToolDef>,
+    fe: &mut dyn Frontend,
+    telemetry: &mut Telemetry,
+    pedido: String,
+) -> String {
+    let defs_chars = serde_json::to_string(&defs).map(|s| s.len()).unwrap_or(0);
+    let orc = Orcamento::para(&telemetry.limites, telemetry.fator_tokens, defs_chars);
+    avisar_corte(fe, &compactar_historico(messages, &orc));
+    messages.push(Message::user(pedido));
+    fe.waiting();
+    let resposta = api::code_chat(cfg, messages, defs, &mut |ev| {
+        if !matches!(ev, Event::ToolCall(_)) {
+            fe.on_event(ev);
+        }
+    })
+    .await;
+    fe.end_stream();
+    messages.pop();
+    let r = match resposta {
+        Ok(r) => r,
+        Err(e) => {
+            fe.warn(&format!("sem o resumo de fechamento: {e}"));
+            return String::new();
+        }
+    };
+    if let Some(u) = &r.usage {
+        telemetry.add(u);
+    }
+    if let Some(e) = r.error.as_deref().filter(|_| !r.interrompido) {
+        fe.warn(&format!("sem o resumo de fechamento: {e}"));
+    }
+    if r.interrompido || r.error.is_some() {
+        return String::new();
+    }
+    registrar_resposta(messages, &r.text, &[]);
+    r.text
+}
+
 /// Devolve o TEXTO final do turno (o que o modelo respondeu sem pedir mais
 /// ferramenta). O REPL descarta; o orquestrador precisa — é dali que sai o
 /// artefato JSON das fases arquiteto/revisor. Erro do gateway devolve texto
@@ -571,7 +630,21 @@ pub async fn run_turn(
         }
     }
 
-    fe.aviso_teto(teto);
+    // The ceiling with nobody granting another batch: one more request for the turn's last word.
+    let pedido = format!(
+        "{ANNA} Este turno chegou ao teto de {teto} voltas e vai parar aqui. NÃO chame ferramentas nesta \
+         resposta (se chamar, ela não roda). Em poucas linhas, para o dev: o que já foi feito, o que \
+         falta e qual seria o próximo passo. Ele decide se continua."
+    );
+    let resumo = volta_de_fechamento(cfg, messages, runner.tool_defs(), fe, telemetry, pedido).await;
+    if !resumo.is_empty() {
+        ultimo_texto = resumo;
+    }
+    if interrupcao::pedido() {
+        fe.turno_interrompido();
+    } else {
+        fe.aviso_teto(teto);
+    }
     fe.turn_end(telemetry);
     Ok(ultimo_texto)
 }

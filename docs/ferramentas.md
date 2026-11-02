@@ -100,6 +100,13 @@ already in the tree (`notes.md -> ../outside.txt`, or `hook.txt -> .git/hooks/pr
 took an approved write outside the project or into a git hook. `edit_file` applies the same
 check.
 
+**Instruction files always ask (0.15.4).** A write (`edit_file` or `write_file`) to `ANNA.md`,
+`AGENTS.md`, `CLAUDE.md` or `CLAUDE.local.md`, by the requested name or by its real target, uses
+the **always** gate: `t` does not cover it, and an NDJSON host's `always` is a refusal there.
+Those files are loaded into every later session of every agent (anna's context block, Claude
+Code, Codex), so an instruction injected in one turn, riding a session-wide approval, would
+outlive the session.
+
 ### `bash` · gate: **auto p/ allowlist · confirm p/ resto · always p/ destrutivo**
 ```json
 {"name":"bash","description":"Roda um comando no diretório do projeto.",

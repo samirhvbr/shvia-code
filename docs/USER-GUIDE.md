@@ -6,10 +6,17 @@ live model/tool round trip or acceptance in a packaged host.
 ## Project context
 
 Start `anna` in the project to inspect. It walks upward to the first `.git` entry, or
-uses the current directory when none exists. The first existing root instruction file
-in this order is selected: **ANNA.md → CLAUDE.md → AGENTS.md**. They are not merged;
-up to 6,000 characters of the selected file enter the project prompt. Instructions
-in nested directories are not discovered as a separate hierarchy.
+uses the current directory when none exists. In each folder from the root down to the
+one `anna` runs in, the first existing instruction file in this order is selected:
+**ANNA.md → CLAUDE.md → AGENTS.md** (0.15.5+; before, the root only). Up to 6,000
+characters of each, and 9,000 in all, enter the project prompt, which is resent on every
+round. A cut file says so, with its size, so the model can read the rest with `read_file`;
+a file that is the same rules under another title (this fleet mirrors CLAUDE.md and
+AGENTS.md below the H1) is loaded once; and the other instruction files found are listed
+by name and size, not loaded. The first time a tool touches a subfolder whose nearest
+instruction file is not in the prompt, its result gets one line pointing at that file and
+its size (0.15.6+), once per folder per process; the file itself is read only if the model
+asks for it.
 
 Tools use the detected project root. Run session resume from the original project;
 the stored session does not bind itself to a project directory. Git worktree roots are

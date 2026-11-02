@@ -3,6 +3,70 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.6 - Point the model at a subfolder's own instruction file the first time a tool goes there
+
+0.15.5 loads the instruction files from the root down to the working folder, but a model often
+works in a subfolder it was not started in — a package of a monorepo, a vendored tool — and that
+folder's AGENTS.md or CLAUDE.md never reached it. Hermes appends that file to the tool result on
+the first touch (`subdirectory_hints`, comparison of 02/11/2026).
+
+- When a tool with a `path` (`read_file`, `edit_file`, `write_file`, `list_dir`, `grep`) touches a
+  folder whose nearest instruction file is neither in the prompt, nor listed in it, nor already
+  pointed out, its result gets one line: `[anna: esta pasta tem instruções próprias em
+  pkg/AGENTS.md (15 caracteres), fora do contexto carregado. Leia com read_file antes de mexer
+  aqui.]`. Once per folder per process.
+- **A pointer, not the file:** a tool result stays in the history and is resent on every later
+  round, so the rules are read only when the model asks for them.
+- Paths are canonical before anything is looked up, so `../` never points at a file outside the
+  project.
+
+Tests: `a_subpasta_com_instrucoes_proprias_e_apontada_uma_vez` (unit) and, against the scripted
+gateway, `the_prompt_carries_the_project_rules_and_a_subfolder_with_its_own_is_pointed_out_on_first_touch`
+(which also checks the 0.15.5 block in the real system prompt). Reversals, each red: no pointer,
+pointed out every time, the hook in the loop removed. Docs: `docs/USER-GUIDE.md`.
+
+## 0.15.5 - Load the instruction file of every folder down to the working one, and say when one is cut
+
+The project prompt took the first of ANNA.md, CLAUDE.md and AGENTS.md at the repository root,
+cut to 6,000 characters without a word. A model running in `app/` never saw `app/AGENTS.md`, a
+second file at the root was invisible, and a rule book cut in the middle read as complete.
+
+- **One file per folder, from the root down to the folder `anna` runs in**, chosen in the same
+  order (ANNA.md, CLAUDE.md, AGENTS.md): the deeper ones are the more specific rules.
+- **The cut is said:** `[… CLAUDE.md tem N caracteres; aqui estão os primeiros 6000. O resto:
+  read_file CLAUDE.md.]`. Up to 6,000 characters per file and 9,000 in all, because the block is
+  resent on every round of every turn: it is a cost per request. A file left out by the total is
+  listed instead.
+- **A mirror is loaded once:** this fleet keeps CLAUDE.md and AGENTS.md "mirrored below the H1",
+  and the same rules twice would double the cost for nothing. Files compare below their first H1.
+- **The other instruction files found are listed** by name and size, not loaded, so the model
+  knows they exist and can read them.
+- Running at the root with one short file, the block is what it was.
+
+Hermes and claw-code both walk the folder chain (comparison of 02/11/2026); claw-code caps 4,000
+per file and 12,000 in all. Tests: `instrucoes_da_raiz_ao_diretorio_de_trabalho_sem_espelho_e_sem_corte_mudo`
+and `na_raiz_com_um_arquivo_curto_o_bloco_e_o_de_sempre`. Reversals, each red: no chain, no cut
+notice, no mirror check. `Project::detectar_em` takes the working folder, so the detection is
+testable without changing the process directory. Docs: `docs/USER-GUIDE.md`.
+
+## 0.15.4 - Ask every time before writing an instruction file, session approval or not
+
+`ANNA.md`, `AGENTS.md` and `CLAUDE.md` are loaded into the prompt of every later session — by
+anna's context block, by Claude Code and by Codex. A write to one of them went through the
+ordinary confirmation, so once the person answered `t` ("all this session") for `write_file` or
+`edit_file`, a prompt injected through a file the model read could plant an instruction that
+outlives the session and reaches every agent that opens the project. Hermes requires a person for
+these writes in every mode (comparison of 02/11/2026).
+
+- `edit_file` and `write_file` use the **always** gate for `ANNA.md`, `AGENTS.md`, `CLAUDE.md` and
+  `CLAUDE.local.md` (any folder, any case), checked on the requested name and on the real target
+  after links: a link named `CLAUDE.md` writes what CLAUDE.md shows.
+- `t` does not cover them, and an NDJSON host answering `always` is a refusal there, as for
+  destructive shell commands. Other files keep the ordinary confirmation.
+
+Test: `escrever_arquivo_de_instrucao_pergunta_sempre` (red with the rule off). Docs:
+`docs/ferramentas.md`, `SECURITY_GUIDELINES.md` §2.
+
 ## 0.15.3 - Tell a model that repeats the same call with the same result at three laps, and stop the turn at five
 
 The only guard against a model going round in circles was the round ceiling: late (100 rounds)

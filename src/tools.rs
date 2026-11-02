@@ -342,6 +342,28 @@ fn glob_files(root: &Path, pattern: &str) -> String {
 
 // ── Escrita (C2) — Preview + aprovação via frontend ─────────────────────────
 
+/// The files the fleet's agents load as their own instructions: anna's context block, Claude
+/// Code and Codex read them at the start of every session.
+pub fn eh_arquivo_de_instrucao(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| matches!(n.to_ascii_lowercase().as_str(), "anna.md" | "agents.md" | "claude.md" | "claude.local.md"))
+}
+
+/// A write to an instruction file always asks, even with "t/Sempre" granted for the tool
+/// (0.15.4). What goes in there is loaded into every later session of every agent, so a prompt
+/// injected in one turn, riding a session-wide approval, would plant an instruction that outlives
+/// the session. Hermes requires a person for these writes in every mode (comparison of
+/// 02/11/2026). The requested name and the real target both count: a link named `CLAUDE.md`
+/// writes what CLAUDE.md shows.
+fn politica_de_escrita(pedido: &str, real: &Path) -> Policy {
+    if eh_arquivo_de_instrucao(Path::new(pedido)) || eh_arquivo_de_instrucao(real) {
+        Policy::Always
+    } else {
+        Policy::Confirm
+    }
+}
+
 fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, id: &str, fe: &mut dyn Frontend) -> String {
     if guard::denied(path) {
         return format!("RECUSADO: '{path}' está na denylist de segredos (SECURITY §2.3).");
@@ -371,7 +393,7 @@ fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, i
     let updated = if replace_all { content.replace(old, new) } else { content.replacen(old, new, 1) };
     let shown = mostrado(root, path, &full);
     let preview = Preview::Diff { path: &shown, old: content.as_str(), new: updated.as_str() };
-    if !fe.approve(Policy::Confirm, "edit_file", id, &preview) {
+    if !fe.approve(politica_de_escrita(path, &full), "edit_file", id, &preview) {
         return "RECUSADO: edição cancelada pelo usuário.".into();
     }
     crate::checkpoint::snapshot(root, &format!("edit_file {path}"));
@@ -402,7 +424,7 @@ fn write_file(root: &Path, path: &str, content: &str, id: &str, fe: &mut dyn Fro
     }
     let shown = mostrado(root, path, &full);
     let preview = Preview::Diff { path: &shown, old: old.as_str(), new: content };
-    if !fe.approve(Policy::Confirm, "write_file", id, &preview) {
+    if !fe.approve(politica_de_escrita(path, &full), "write_file", id, &preview) {
         return "RECUSADO: escrita cancelada pelo usuário.".into();
     }
     crate::checkpoint::snapshot(root, &format!("write_file {path}"));
@@ -1661,6 +1683,7 @@ mod tests {
     #[derive(Default)]
     struct Aprova {
         cartao: String,
+        politicas: Vec<Policy>,
     }
 
     impl Frontend for Aprova {
@@ -1670,7 +1693,8 @@ mod tests {
         fn turn_end(&mut self, _: &crate::telemetry::Telemetry) {}
         fn error(&mut self, _: &str) {}
         fn warn(&mut self, _: &str) {}
-        fn approve(&mut self, _: Policy, _: &str, _: &str, preview: &Preview) -> bool {
+        fn approve(&mut self, policy: Policy, _: &str, _: &str, preview: &Preview) -> bool {
+            self.politicas.push(policy);
             if let Preview::Diff { path, .. } = preview {
                 self.cartao = path.to_string();
             }
@@ -1680,6 +1704,24 @@ mod tests {
             false
         }
         fn aviso_teto(&mut self, _: usize) {}
+    }
+
+    /// 0.15.4: what goes into an instruction file is loaded into every later session, so a session-wide
+    /// "t/Sempre" for the write tools must not cover it. Other files keep the ordinary confirmation.
+    #[test]
+    fn escrever_arquivo_de_instrucao_pergunta_sempre() {
+        let root = sandbox();
+        std::fs::write(root.join("CLAUDE.md"), "regras\n").unwrap();
+        std::fs::write(root.join("notas.md"), "x\n").unwrap();
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        let mut fe = Aprova::default();
+        edit_file(&root, "CLAUDE.md", "regras", "outras regras", false, "e1", &mut fe);
+        edit_file(&root, "notas.md", "x", "y", false, "e2", &mut fe);
+        write_file(&root, "app/AGENTS.md", "novo\n", "w1", &mut fe);
+        write_file(&root, "app/README.md", "novo\n", "w2", &mut fe);
+        assert_eq!(fe.politicas, vec![Policy::Always, Policy::Confirm, Policy::Always, Policy::Confirm]);
+        assert_eq!(std::fs::read_to_string(root.join("CLAUDE.md")).unwrap(), "outras regras\n", "approved, it is written");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 🔴 External review, 26/10/2026: the grep tool read what read_file refuses — a non-ignored

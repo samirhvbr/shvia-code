@@ -22,7 +22,9 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
    every destructive operation can be recognized.
 2. **Untrusted content (A1).** Tool output is conversation data, not permission to relax
    gates. Architectural/reviewer roles filter write/shell tools in code. Models can still
-   follow malicious instructions in files; inspect proposed changes and commands.
+   follow malicious instructions in files; inspect proposed changes and commands. A write to
+   an instruction file (`ANNA.md`, `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`) always asks,
+   session approval or not (0.15.4): it would persist into every later session's prompt.
 3. **File paths and secrets (A2).** `read_file`, `grep`, `edit_file` and `write_file` check
    the requested path **and** the real file after every symlink against `guard::denied`;
    canonical path helpers constrain filesystem tools to the project, and a write to a name

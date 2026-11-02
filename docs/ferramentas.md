@@ -100,6 +100,14 @@ already in the tree (`notes.md -> ../outside.txt`, or `hook.txt -> .git/hooks/pr
 took an approved write outside the project or into a git hook. `edit_file` applies the same
 check.
 
+**Overwriting needs the file as it is (0.15.7).** `write_file` over an existing file is refused,
+before any approval card, when this session never read the whole file (`read_file` cut at
+`max_bytes` does not count) or when the file changed since that read or since the model's own
+last write or edit (the developer's edit, a formatter, another tool). The refusal says how: read it
+again and merge, or change only the passage with `edit_file`, which needs no such guard because its
+exact `old_string` must match the file as it is. The mark is a hash of the content, kept per
+process; a new file needs no read.
+
 **Instruction files always ask (0.15.4).** A write (`edit_file` or `write_file`) to `ANNA.md`,
 `AGENTS.md`, `CLAUDE.md` or `CLAUDE.local.md`, by the requested name or by its real target, uses
 the **always** gate: `t` does not cover it, and an NDJSON host's `always` is a refusal there.

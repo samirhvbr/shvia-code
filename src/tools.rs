@@ -17,9 +17,11 @@ use crate::types::{ToolCall, ToolDef};
 use globset::Glob;
 use ignore::WalkBuilder;
 use serde_json::json;
-use std::path::Path;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const MAX_BYTES: usize = 64 * 1024;
@@ -205,6 +207,48 @@ fn mostrado(root: &Path, path: &str, full: &Path) -> String {
 
 // ── Leitura (C1) ────────────────────────────────────────────────────────────
 
+// ── What the model has seen of each file (0.15.7) ───────────────────────────
+//
+// A whole-file write replaces the file with what the model believes is in it. When that belief is
+// a read from three rounds ago, or a guess from a grep, the write throws away whatever changed in
+// between: the person's own edit, a formatter, another tool. The diff on the approval card shows
+// the loss, but in a long diff it is easy to miss, and with "t" granted for `write_file` nobody
+// looks. Hermes refuses such a write until the file is read again (`file_tools_write_guards.py`,
+// comparison of 02/11/2026). `edit_file` needs no guard: its exact `old_string` must match the
+// file as it is now.
+
+/// The content mark of each file as the model last saw it whole: read in full, or written by it.
+static VISTOS: Mutex<Option<HashMap<PathBuf, u64>>> = Mutex::new(None);
+
+fn marca(bytes: &[u8]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
+fn com_vistos<T>(f: impl FnOnce(&mut HashMap<PathBuf, u64>) -> T) -> T {
+    let mut guarda = VISTOS.lock().unwrap_or_else(|e| e.into_inner());
+    f(guarda.get_or_insert_with(HashMap::new))
+}
+
+/// Why overwriting `full` (now holding `atual`) is refused, or `None` when the model has seen it
+/// as it is.
+fn escrita_sobre_leitura_velha(full: &Path, path: &str, atual: &[u8]) -> Option<String> {
+    match com_vistos(|v| v.get(full).copied()) {
+        None => Some(format!(
+            "RECUSADO: '{path}' já existe e não foi lido inteiro nesta sessão — sobrescrever agora apagaria o que \
+             você não viu. Leia o arquivo inteiro (read_file; max_bytes ≥ {} se precisar) e reescreva a partir dele, \
+             ou troque só o trecho com edit_file.",
+            atual.len()
+        )),
+        Some(m) if m != marca(atual) => Some(format!(
+            "RECUSADO: '{path}' mudou desde a sua última leitura (uma edição do dev, um comando ou outra ferramenta) — \
+             sobrescrever agora desfaria essa mudança. Releia e mescle, ou use edit_file."
+        )),
+        _ => None,
+    }
+}
+
 fn read_file(root: &Path, path: &str, max_bytes: usize) -> String {
     if guard::denied(path) {
         return format!("RECUSADO: '{path}' está na denylist de segredos (SECURITY §2.3).");
@@ -221,6 +265,9 @@ fn read_file(root: &Path, path: &str, max_bytes: usize) -> String {
     match std::fs::read(&full) {
         Ok(bytes) => {
             let total = bytes.len();
+            if total <= max_bytes {
+                com_vistos(|v| v.insert(full.clone(), marca(&bytes)));
+            }
             let slice = if total > max_bytes { &bytes[..max_bytes] } else { &bytes[..] };
             let mut out = String::from_utf8_lossy(slice).into_owned();
             if total > max_bytes {
@@ -397,8 +444,16 @@ fn edit_file(root: &Path, path: &str, old: &str, new: &str, replace_all: bool, i
         return "RECUSADO: edição cancelada pelo usuário.".into();
     }
     crate::checkpoint::snapshot(root, &format!("edit_file {path}"));
-    match std::fs::write(&full, updated) {
-        Ok(_) => format!("ok — {path} editado ({} ocorrência(s)).", if replace_all { count } else { 1 }),
+    match std::fs::write(&full, &updated) {
+        Ok(_) => {
+            // A model that had seen the whole file still has: it knows the change it made.
+            com_vistos(|v| {
+                if v.get(&full) == Some(&marca(content.as_bytes())) {
+                    v.insert(full.clone(), marca(updated.as_bytes()));
+                }
+            });
+            format!("ok — {path} editado ({} ocorrência(s)).", if replace_all { count } else { 1 })
+        }
         Err(e) => format!("ERRO: falha ao gravar '{path}': {e}"),
     }
 }
@@ -414,6 +469,12 @@ fn write_file(root: &Path, path: &str, content: &str, id: &str, fe: &mut dyn Fro
         return format!("RECUSADO: '{path}' aponta para um arquivo da denylist de segredos (SECURITY §2.3).");
     }
     let existed = full.exists();
+    if existed {
+        let atual = std::fs::read(&full).unwrap_or_default();
+        if let Some(recusa) = escrita_sobre_leitura_velha(&full, path, &atual) {
+            return recusa;
+        }
+    }
     let old = std::fs::read_to_string(&full).unwrap_or_default();
     // "Sem mudanças" só vale se o arquivo JÁ existe com esse conteúdo. Sem o
     // `existed`, criar um arquivo novo vazio (content=="") batia com o
@@ -429,7 +490,10 @@ fn write_file(root: &Path, path: &str, content: &str, id: &str, fe: &mut dyn Fro
     }
     crate::checkpoint::snapshot(root, &format!("write_file {path}"));
     match std::fs::write(&full, content) {
-        Ok(_) => format!("ok — '{path}' {} ({} bytes).", if existed { "sobrescrito" } else { "criado" }, content.len()),
+        Ok(_) => {
+            com_vistos(|v| v.insert(full.clone(), marca(content.as_bytes())));
+            format!("ok — '{path}' {} ({} bytes).", if existed { "sobrescrito" } else { "criado" }, content.len())
+        }
         Err(e) => format!("ERRO: falha ao gravar '{path}': {e}"),
     }
 }
@@ -1706,6 +1770,40 @@ mod tests {
         fn aviso_teto(&mut self, _: usize) {}
     }
 
+    /// 0.15.7: a whole-file write replaces the file with what the model believes is in it; when it
+    /// never read the file, or the file changed since, the write would erase what it did not see.
+    #[test]
+    fn sobrescrever_exige_ter_visto_o_arquivo_como_ele_esta() {
+        let root = sandbox();
+        std::fs::write(root.join("app.rs"), "fn main() {}\n").unwrap();
+        let mut fe = Aprova::default();
+
+        // Never read: refused before any approval card.
+        let cego = write_file(&root, "app.rs", "fn main() { novo() }\n", "w1", &mut fe);
+        assert!(cego.starts_with("RECUSADO") && cego.contains("não foi lido inteiro"), "{cego}");
+        assert!(fe.politicas.is_empty(), "refused before asking anyone");
+
+        // Read whole, then changed on disk (the person's edit): refused again.
+        read_file(&root, "app.rs", MAX_BYTES);
+        std::fs::write(root.join("app.rs"), "fn main() { do_dev() }\n").unwrap();
+        let velho = write_file(&root, "app.rs", "fn main() { novo() }\n", "w2", &mut fe);
+        assert!(velho.starts_with("RECUSADO") && velho.contains("mudou desde a sua última leitura"), "{velho}");
+        assert_eq!(std::fs::read_to_string(root.join("app.rs")).unwrap(), "fn main() { do_dev() }\n", "the person's edit survives");
+
+        // Read as it is now: the write goes through, and what it wrote counts as seen.
+        read_file(&root, "app.rs", MAX_BYTES);
+        assert!(write_file(&root, "app.rs", "fn main() { novo() }\n", "w3", &mut fe).starts_with("ok"));
+        assert!(edit_file(&root, "app.rs", "novo", "novo2", false, "e1", &mut fe).starts_with("ok"));
+        assert!(write_file(&root, "app.rs", "fn main() {}\n", "w4", &mut fe).starts_with("ok"), "its own edit does not make the file stale");
+
+        // A new file needs no read; a read cut at max_bytes does not count as whole.
+        assert!(write_file(&root, "novo.rs", "x\n", "w5", &mut fe).starts_with("ok"));
+        std::fs::write(root.join("grande.txt"), "y".repeat(100)).unwrap();
+        read_file(&root, "grande.txt", 10);
+        assert!(write_file(&root, "grande.txt", "z\n", "w6", &mut fe).starts_with("RECUSADO"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// 0.15.4: what goes into an instruction file is loaded into every later session, so a session-wide
     /// "t/Sempre" for the write tools must not cover it. Other files keep the ordinary confirmation.
     #[test]
@@ -1769,6 +1867,7 @@ mod tests {
 
         // A link that stays inside the project still works — and the card names the real file.
         symlink("README.md", root.join("leia.md")).unwrap();
+        read_file(&root, "leia.md", MAX_BYTES); // 0.15.7: an existing file is read before it is overwritten
         assert!(write_file(&root, "leia.md", "# Novo\n", "4", &mut fe).starts_with("ok"));
         assert_eq!(fe.cartao, "leia.md → README.md");
         assert_eq!(std::fs::read_to_string(root.join("README.md")).unwrap(), "# Novo\n");

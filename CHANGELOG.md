@@ -3,6 +3,28 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.7 - Refuse to overwrite a file the model has not seen as it is now
+
+A whole-file `write_file` replaces the file with what the model believes is in it. When that
+belief is a read from rounds ago, a grep, or a guess, the write erases whatever changed in between:
+the developer's own edit, a formatter, another tool. The approval card's diff shows the loss, but a
+long diff hides it, and with `t` granted for `write_file` nobody looks. Hermes refuses such a write
+until the file is read again (`file_tools_write_guards.py`, comparison of 02/11/2026).
+
+- Per process, anna keeps a content mark of each file as the model last saw it whole: a
+  `read_file` that returned all of it (one cut at `max_bytes` does not count), or the model's own
+  `write_file`, or an `edit_file` on a file it had seen whole.
+- `write_file` over an existing file is **refused before any approval card** when there is no mark
+  ("não foi lido inteiro nesta sessão") or the file no longer matches it ("mudou desde a sua
+  última leitura"), and the refusal says how to go on: read again and merge, or `edit_file`.
+- `edit_file` needs no such guard: its exact `old_string` must match the file as it is. A new file
+  needs no read. The system prompt now says to read a file whole before rewriting it.
+
+Test: `sobrescrever_exige_ter_visto_o_arquivo_como_ele_esta` (blind overwrite, the developer's edit
+in between, read-then-write, the model's own edit, a new file, a cut read). Reversals, each red: the
+guard off, the model's own edit not counted. The 0.13.9 symlink test now reads before it overwrites,
+which is the new contract. Docs: `docs/ferramentas.md`.
+
 ## 0.15.6 - Point the model at a subfolder's own instruction file the first time a tool goes there
 
 0.15.5 loads the instruction files from the root down to the working folder, but a model often

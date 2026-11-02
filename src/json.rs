@@ -51,7 +51,7 @@ fn preview_json(p: &Preview) -> Value {
 impl Frontend for JsonSink {
     fn on_event(&mut self, ev: &Event) {
         match ev {
-            Event::Model { model, server_label } => {
+            Event::Model { model, server_label, .. } => {
                 self.emit(json!({"type":"model","model":model,"server":server_label}))
             }
             Event::TextDelta(d) => self.emit(json!({"type":"text","delta":d})),

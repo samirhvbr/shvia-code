@@ -122,3 +122,33 @@ fn ndjson_cancel_kills_the_running_command_and_answers_every_pending_call() {
     assert!(msgs[n - 2]["content"].as_str().unwrap().starts_with("RECUSADO"), "{}", msgs[n - 2]);
     assert_eq!(msgs[n - 1], json!({"role": "user", "content": "go on"}));
 }
+
+#[test]
+fn a_provider_refusal_is_retried_once_with_a_shorter_history() {
+    let home = Home::new();
+    // A resumed session long enough to cut, against a gateway that does not announce a
+    // window: the provider's refusal is the only signal that the context is full.
+    let mut history = vec![json!({"role": "system", "content": "seed"}), json!({"role": "user", "content": "first request"})];
+    for i in 0..30 {
+        history.push(json!({"role": "assistant", "content": format!("step {i}")}));
+        history.push(json!({"role": "user", "content": format!("more {i}")}));
+    }
+    let sessions = home.0.join(".shvia-code/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(sessions.join("42.json"), json!({"id": "42", "title": "t", "messages": history}).to_string()).unwrap();
+    let (url, server) = gateway(vec![
+        Reply::Sse(vec![
+            json!({"kind": "error", "data": {"message": "prompt too long", "codigo": "provedor_recusou_pedido", "status": 400}}),
+            json!({"kind": "done", "data": {"text": "", "tool_calls": []}}),
+        ]),
+        text("Done."),
+    ]);
+    home.run(&url, &["sessions", "resume", "42"], "next\n/exit\n");
+    let requests = server.join().unwrap();
+
+    let (first, retry) = (requests[0]["messages"].as_array().unwrap(), requests[1]["messages"].as_array().unwrap());
+    assert!(retry.len() < first.len() / 2 + 8, "the retry must be cut harder: {} → {}", first.len(), retry.len());
+    let has = |msgs: &[Value], content: &str| msgs.iter().any(|m| m["content"] == content);
+    assert!(has(retry, "first request") && has(retry, "next"), "the requests that anchor the work stay");
+    assert!(retry.iter().any(|m| m["content"].as_str().unwrap().starts_with("[Contexto compactado]")));
+}

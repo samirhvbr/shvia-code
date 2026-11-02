@@ -34,13 +34,109 @@ use anyhow::Result;
 // owner's Desktop session on MiniMax M3.1 Flash: a compaction notice before almost
 // every tool call, the same three worktrees' `git diff` read twice each, and the
 // 100-round ceiling reached at 153 tools and 4.47M tokens.
+//
+// 🔴 Until 0.15.0 the count was the only budget, and it said nothing about tokens. A local
+// model served with `num_ctx` 32k got up to 150 messages, and the provider either cut the
+// start of the prompt in silence or (Ollama with `truncate:false`) refused the request with
+// a 400 that ended the turn. Since 0.15.0 the gateway's `model` event says the target's
+// ceiling and window (`Limites`), the history is also budgeted in tokens, and a refusal is
+// retried once with a harder cut (`run_turn`).
+/// The gateway's per-request message ceiling before it announced one (and when it announces
+/// one without a window: a count is then the only budget, so it stays where it was proven).
+const TETO_PADRAO: usize = 200;
 /// Compaction starts when the history goes over COMPACTA_EM (headroom under the
 /// gateway's 200: the worst real case is ~33 messages in one round).
 const COMPACTA_EM: usize = 150;
 /// ...and cuts down to COMPACTA_PARA, so the next cut is ~25 rounds away instead of
 /// on the next round, and the prefix the provider receives stays the same between
-/// cuts.
+/// cuts. Other ceilings scale the same way (3/4 and 1/2 of the ceiling).
 const COMPACTA_PARA: usize = 100;
+/// Token budget against a known window: start cutting past 70% (the answer and the next
+/// round's tool results need the rest), and cut down to 50%, for the same reason the count
+/// cuts deep: few cuts, each one far from the next, so the prefix stays cacheable.
+const JANELA_GATILHO: f64 = 0.70;
+const JANELA_ALVO: f64 = 0.50;
+
+/// The budget the history must fit before a request.
+pub struct Orcamento {
+    /// The message ceiling the gateway validates.
+    teto_mensagens: usize,
+    /// `(start cutting above, cut down to)`, in estimated tokens; `None` = window unknown.
+    tokens: Option<(u64, u64)>,
+    /// Calibration of the chars/4 estimate (`Telemetry::fator_tokens`).
+    fator: f64,
+    /// Chars sent besides the messages (tool definitions), counted in the estimate.
+    extra_chars: usize,
+}
+
+impl Orcamento {
+    /// Without limits from the gateway: the count ceiling it has always validated.
+    #[cfg(test)]
+    pub fn padrao() -> Self {
+        Self { teto_mensagens: TETO_PADRAO, tokens: None, fator: 1.0, extra_chars: 0 }
+    }
+
+    pub fn para(limites: &crate::types::Limites, fator: Option<f64>, extra_chars: usize) -> Self {
+        let teto_mensagens = match (limites.mensagens, limites.janela) {
+            // With a window the tokens are the real budget, and the count is only the
+            // gateway's validation, so it can be as high as the gateway allows.
+            (Some(m), Some(_)) => m,
+            (Some(m), None) => m.min(TETO_PADRAO),
+            (None, _) => TETO_PADRAO,
+        }
+        .max(8);
+        let tokens = limites
+            .janela
+            .filter(|&j| j > 0)
+            .map(|j| ((j as f64 * JANELA_GATILHO) as u64, (j as f64 * JANELA_ALVO) as u64));
+        Self { teto_mensagens, tokens, fator: fator.unwrap_or(1.0), extra_chars }
+    }
+
+    /// The harder cut after the provider refused the request: half of what was just sent.
+    fn forcado(&self, messages: &[Message]) -> Self {
+        let estimado = self.estimar(messages);
+        let metade = (estimado / 2).max(1);
+        Self {
+            teto_mensagens: (messages.len() / 2).max(8),
+            tokens: Some((metade, metade)),
+            fator: self.fator,
+            extra_chars: self.extra_chars,
+        }
+    }
+
+    fn tokens_de(&self, m: &Message) -> u64 {
+        let args: usize = m.tool_calls.iter().map(|c| c.name.len() + c.arguments.to_string().len()).sum();
+        ((m.content.len() + args) as f64 / 4.0 * self.fator).ceil() as u64
+    }
+
+    pub fn estimar(&self, messages: &[Message]) -> u64 {
+        let extra = (self.extra_chars as f64 / 4.0 * self.fator).ceil() as u64;
+        extra + messages.iter().map(|m| self.tokens_de(m)).sum::<u64>()
+    }
+}
+
+/// Why a cut happened, for the warning and the marker.
+#[derive(Debug, PartialEq)]
+enum Motivo {
+    TetoDoGateway,
+    JanelaDoModelo,
+}
+
+/// Real `prompt_tokens` ÷ the chars/4 estimate of the request that produced them, clamped
+/// so one odd response (a provider that counts nothing, a huge image) cannot swing the
+/// budget by orders of magnitude.
+fn fator_medido(prompt_tokens: u64, chars_enviados: usize) -> Option<f64> {
+    let ingenuo = chars_enviados as f64 / 4.0;
+    (prompt_tokens > 0 && ingenuo >= 1.0).then(|| (prompt_tokens as f64 / ingenuo).clamp(0.3, 4.0))
+}
+
+fn chars_do_pedido(messages: &[Message], extra_chars: usize) -> usize {
+    extra_chars
+        + messages
+            .iter()
+            .map(|m| m.content.len() + m.tool_calls.iter().map(|c| c.name.len() + c.arguments.to_string().len()).sum::<usize>())
+            .sum::<usize>()
+}
 /// Prefix that identifies the compaction marker (so it is replaced, never piled up
 /// one per cut).
 const MARCADOR: &str = "[Contexto compactado]";
@@ -49,7 +145,8 @@ fn eh_marcador(m: &Message) -> bool {
     m.role == "system" && m.content.starts_with(MARCADOR)
 }
 
-/// Shrinks `messages` to fit the gateway's ceiling, keeping:
+/// Shrinks `messages` to fit the budget (the gateway's ceiling and, when the target's window
+/// is known, the tokens), keeping:
 /// - the INITIAL `system` messages (the agent's seed prompt and project context);
 /// - the person's requests that anchor the work: the FIRST `user` message of the
 ///   session and the LATEST one. A turn that the person resumed with "continua", or
@@ -61,21 +158,54 @@ fn eh_marcador(m: &Message) -> bool {
 /// - a single `system` marker at the cut, telling the model a stretch is missing
 ///   (without it, the model "remembers" what is no longer there and hallucinates).
 ///
-/// Below COMPACTA_EM nothing changes, including the marker of an earlier cut.
-/// Returns how many messages left (0 = nothing to do).
-fn compactar_historico(messages: &mut Vec<Message>) -> usize {
-    if messages.len() <= COMPACTA_EM {
-        return 0;
+/// Below both triggers nothing changes, including the marker of an earlier cut.
+/// Returns how many messages left (0 = nothing to do) and why.
+fn compactar_historico(messages: &mut Vec<Message>, orc: &Orcamento) -> (usize, Option<Motivo>) {
+    let gatilho = orc.teto_mensagens * COMPACTA_EM / TETO_PADRAO;
+    let alvo = orc.teto_mensagens * COMPACTA_PARA / TETO_PADRAO;
+    let por_contagem = messages.len() > gatilho;
+    let por_tokens = orc.tokens.filter(|&(acima, _)| orc.estimar(messages) > acima).map(|(_, alvo)| alvo);
+    if !por_contagem && por_tokens.is_none() {
+        return (0, None);
     }
 
     // Head = the run of `system` messages at the START (seed prompt + context). A
     // `system` in the middle of the history (e.g. a loop nudge) counts as conversation.
     let cabeca = messages.iter().take_while(|m| m.role == "system" && !eh_marcador(m)).count();
 
-    // Window = the most recent messages that fit in COMPACTA_PARA, leaving room for
-    // the marker and the two kept requests.
-    let orcamento = COMPACTA_PARA.saturating_sub(cabeca + 3).max(1);
-    let mut corte = messages.len().saturating_sub(orcamento).max(cabeca);
+    // Window = the most recent messages that fit in the count target, leaving room for
+    // the marker and the two kept requests...
+    let orcamento = alvo.saturating_sub(cabeca + 3).max(1);
+    let mut corte = if por_contagem { messages.len().saturating_sub(orcamento) } else { cabeca }.max(cabeca);
+    // ...and, when the tokens triggered, in the token target: walk back from the end while
+    // the head, the two kept requests and the marker still leave room.
+    if let Some(alvo_tokens) = por_tokens {
+        let pedido = |de_tras: bool| {
+            let mut it = (cabeca..messages.len()).filter(|&i| messages[i].role == "user");
+            if de_tras { it.next_back() } else { it.next() }
+        };
+        let fixos: u64 = messages[..cabeca].iter().map(|m| orc.tokens_de(m)).sum::<u64>()
+            + [pedido(false), pedido(true)].into_iter().flatten().map(|i| orc.tokens_de(&messages[i])).sum::<u64>()
+            + orc.estimar(&[]) // the tool definitions
+            + 150; // the marker
+        let mut soma = fixos;
+        let mut i = messages.len();
+        while i > cabeca {
+            let t = orc.tokens_de(&messages[i - 1]);
+            if soma + t > alvo_tokens {
+                break;
+            }
+            soma += t;
+            i -= 1;
+        }
+        // The token cut never takes the latest assistant turn and its tool results: they
+        // are what the model is about to act on, however large (a single huge result is
+        // the gateway's to trim). The count cut keeps its own rule, which bounds the count.
+        if let Some(ultimo) = (cabeca..messages.len()).rev().find(|&j| messages[j].role == "assistant") {
+            i = i.min(ultimo);
+        }
+        corte = corte.max(i);
+    }
     // Never open the window on an orphan tool result.
     while corte < messages.len() && messages[corte].role == "tool" {
         corte += 1;
@@ -91,8 +221,13 @@ fn compactar_historico(messages: &mut Vec<Message>) -> usize {
         .filter(|&i| !eh_marcador(&messages[i]) && !mantidos.contains(&i))
         .count();
     if removidas == 0 {
-        return 0;
+        return (0, None);
     }
+    let motivo = if por_tokens.is_some() { Motivo::JanelaDoModelo } else { Motivo::TetoDoGateway };
+    let onde = match motivo {
+        Motivo::TetoDoGateway => "no teto por requisição do gateway",
+        Motivo::JanelaDoModelo => "na janela de contexto do modelo",
+    };
 
     let tem_pedido = messages[cabeca..].iter().any(|m| m.role == "user");
     let pedidos = if tem_pedido {
@@ -103,7 +238,7 @@ fn compactar_historico(messages: &mut Vec<Message>) -> usize {
     };
     let marcador = Message::system(format!(
         "{MARCADOR} {removidas} mensagens antigas desta sessão saíram do contexto para \
-         caber no teto por requisição do gateway.{pedidos} Continue de onde as mensagens \
+         caber {onde}.{pedidos} Continue de onde as mensagens \
          recentes param. NÃO presuma o que estava no trecho ausente, mas também não refaça \
          o que as mensagens recentes já mostram: use as ferramentas (read_file, grep, \
          git_diff) só para o que o próximo passo precisa e não está aqui."
@@ -115,7 +250,23 @@ fn compactar_historico(messages: &mut Vec<Message>) -> usize {
     messages.extend(pedidos_mantidos);
     messages.push(marcador);
     messages.append(&mut janela);
-    removidas
+    (removidas, Some(motivo))
+}
+
+/// The gateway's code for a request the provider refused as such (4xx), `CodigoDeErro` in
+/// SHVIA-WEB. A context overflow is the case that matters here.
+const PROVEDOR_RECUSOU: &str = "provedor_recusou_pedido";
+
+fn avisar_corte(fe: &mut dyn Frontend, (cortadas, motivo): (usize, Option<Motivo>)) {
+    let Some(motivo) = motivo.filter(|_| cortadas > 0) else { return };
+    let onde = match motivo {
+        Motivo::TetoDoGateway => "teto do gateway",
+        Motivo::JanelaDoModelo => "janela de contexto do modelo",
+    };
+    fe.warn(&format!(
+        "histórico compactado: {cortadas} mensagens antigas saíram do contexto \
+         ({onde}); seus pedidos ficaram e o modelo foi avisado do corte."
+    ));
 }
 
 /// Appends the model's response to the history, once, whether or not it asks for tools.
@@ -196,21 +347,44 @@ pub async fn run_turn(
             return Ok(String::new());
         }
         // A cada volta (as tools da volta anterior somam mensagens): o gateway
-        // rejeita >200 itens, e uma sessão que estoura fica presa sem isto.
-        let compactadas = compactar_historico(messages);
-        if compactadas > 0 {
-            fe.warn(&format!(
-                "histórico compactado: {compactadas} mensagens antigas saíram do contexto \
-                 (teto do gateway); seus pedidos ficaram e o modelo foi avisado do corte."
-            ));
-        }
+        // rejeita >200 itens, e uma sessão que estoura fica presa sem isto. Since 0.15.0
+        // also against the target's window, when the gateway said it.
+        let defs = runner.tool_defs();
+        let defs_chars = serde_json::to_string(&defs).map(|s| s.len()).unwrap_or(0);
+        let orc = Orcamento::para(&telemetry.limites, telemetry.fator_tokens, defs_chars);
+        avisar_corte(fe, compactar_historico(messages, &orc));
         let mut tentativa = 0;
+        let mut recuperou = false;
         let result = loop {
             fe.waiting();
-            let r = api::code_chat(cfg, messages, runner.tool_defs(), &mut |ev| fe.on_event(ev)).await?;
+            let enviados = chars_do_pedido(messages, defs_chars);
+            let r = api::code_chat(cfg, messages, defs.clone(), &mut |ev| fe.on_event(ev)).await?;
             fe.end_stream();
             if r.interrompido {
                 break r;
+            }
+            if r.limites != Default::default() {
+                telemetry.limites = r.limites;
+            }
+            if let Some(f) = r.usage.as_ref().and_then(|u| u.prompt_tokens).and_then(|p| fator_medido(p, enviados)) {
+                telemetry.fator_tokens = Some(f);
+            }
+            // The provider refused the request itself (Ollama answers 400 to a prompt over
+            // its `num_ctx`; the gateway classifies it, never by the provider's wording). The
+            // usual cause in a long turn is the context, so cut harder and try once more; any
+            // other cause fails the same way again and is reported as before.
+            if r.codigo.as_deref() == Some(PROVEDOR_RECUSOU) && !recuperou {
+                recuperou = true;
+                let forcado = Orcamento::para(&telemetry.limites, telemetry.fator_tokens, defs_chars).forcado(messages);
+                let (cortadas, motivo) = compactar_historico(messages, &forcado);
+                if cortadas > 0 {
+                    fe.warn(&format!(
+                        "o provedor recusou o pedido ({}) — compactando o histórico e tentando de novo.",
+                        r.error.as_deref().unwrap_or("sem detalhe")
+                    ));
+                    avisar_corte(fe, (cortadas, motivo));
+                    continue;
+                }
             }
             // A failure before the stream opened (429 from the per-key throttle, the gateway
             // briefly down) is waited out instead of ending the turn; nothing was shown or
@@ -289,6 +463,43 @@ pub async fn run_turn(
 mod tests {
     use super::*;
 
+    /// The cut as it ran before 0.15.0: no limits from the gateway, count only.
+    fn compacta(m: &mut Vec<Message>) -> usize {
+        compactar_historico(m, &Orcamento::padrao()).0
+    }
+
+    #[test]
+    fn com_a_janela_conhecida_o_corte_e_por_tokens_e_guarda_o_que_importa() {
+        use crate::types::Limites;
+        // Without a window the count stays the budget, even if the gateway allows more.
+        assert_eq!(Orcamento::para(&Limites { mensagens: Some(5000), janela: None }, None, 0).teto_mensagens, 200);
+        assert_eq!(Orcamento::para(&Limites { mensagens: Some(5000), janela: Some(32_000) }, None, 0).teto_mensagens, 5000);
+
+        // 40 rounds of 2 000-char tool outputs (~500 tokens each) against a 16k window: far
+        // under the 150-message count, far over the 70% token trigger.
+        let orc = Orcamento::para(&Limites { mensagens: Some(5000), janela: Some(16_000) }, Some(1.0), 0);
+        let mut m = vec![Message::system("prompt-semente"), Message::user("corrija o parcelamento")];
+        for i in 0..40 {
+            m.push(Message::assistant(format!("lendo {i}"), vec![]));
+            m.push(Message::tool(format!("id-{i}"), "x".repeat(2000)));
+        }
+        m.push(Message::user("continua"));
+        m.push(Message::assistant("lendo de novo", vec![]));
+        m.push(Message::tool("id-final", "y".repeat(2000)));
+        assert!(orc.estimar(&m) > 11_200, "the fixture must start over the trigger");
+
+        let (cortadas, motivo) = compactar_historico(&mut m, &orc);
+        assert!(cortadas > 0);
+        assert_eq!(motivo, Some(Motivo::JanelaDoModelo));
+        assert!(orc.estimar(&m) <= 8_000, "cut down to the 50% target, got {}", orc.estimar(&m));
+        assert!(tem(&m, "user", "corrija o parcelamento") && tem(&m, "user", "continua"));
+        assert_eq!(m.last().unwrap().tool_call_id.as_deref(), Some("id-final"), "the latest round stays");
+        let marcador = m.iter().find(|x| eh_marcador(x)).unwrap();
+        assert!(marcador.content.contains("janela de contexto do modelo"), "{}", marcador.content);
+        // The very next round has nothing to cut: the target sits well under the trigger.
+        assert_eq!(compactar_historico(&mut m, &orc).0, 0);
+    }
+
     fn sessao(n_conversa: usize) -> Vec<Message> {
         // [system-semente] + alternância user/assistant/tool como numa sessão real.
         let mut m = vec![Message::system("prompt-semente")];
@@ -319,7 +530,7 @@ mod tests {
     fn abaixo_do_teto_nao_mexe() {
         let mut m = sessao(100);
         let antes = m.len();
-        assert_eq!(compactar_historico(&mut m), 0);
+        assert_eq!(compacta(&mut m), 0);
         assert_eq!(m.len(), antes);
     }
 
@@ -327,7 +538,7 @@ mod tests {
     fn acima_do_teto_compacta_preservando_semente_e_recentes() {
         let mut m = sessao(400);
         let ultima = m.last().unwrap().content.clone();
-        let removidas = compactar_historico(&mut m);
+        let removidas = compacta(&mut m);
         assert!(removidas > 0);
         assert!(m.len() <= COMPACTA_EM, "ficou com {} (> {COMPACTA_EM})", m.len());
         assert_eq!(m[0].content, "prompt-semente", "system-semente tem que sobreviver");
@@ -356,13 +567,13 @@ mod tests {
         // in `run_turn`. Before 0.13.6 the request left the context at ~75 rounds.
         let mut m = vec![Message::system("prompt-semente"), Message::user("corrija o parcelamento")];
         for i in 0..100 {
-            compactar_historico(&mut m);
+            compacta(&mut m);
             assert!(tem(&m, "user", "corrija o parcelamento"), "request lost at round {i}");
             volta(&mut m, i);
         }
         m.push(Message::user("continua"));
         for i in 100..200 {
-            compactar_historico(&mut m);
+            compacta(&mut m);
             assert!(m.len() <= 200, "round {i} would send {} messages", m.len());
             assert!(tem(&m, "user", "corrija o parcelamento"), "request lost at round {i}");
             assert!(tem(&m, "user", "continua"), "the latest request lost at round {i}");
@@ -380,12 +591,12 @@ mod tests {
         let mut m = vec![Message::system("prompt-semente"), Message::user("pedido")];
         let mut cortes = 0;
         for i in 0..300 {
-            if compactar_historico(&mut m) > 0 {
+            if compacta(&mut m) > 0 {
                 cortes += 1;
                 assert!(m.len() <= COMPACTA_PARA, "cut to {} (> {COMPACTA_PARA})", m.len());
                 // The very next round has nothing to cut.
                 volta(&mut m, i);
-                assert_eq!(compactar_historico(&mut m), 0, "cut again right after a cut");
+                assert_eq!(compacta(&mut m), 0, "cut again right after a cut");
             } else {
                 volta(&mut m, i);
             }
@@ -396,21 +607,21 @@ mod tests {
     #[test]
     fn abaixo_do_teto_o_marcador_de_um_corte_anterior_fica() {
         let mut m = sessao(400);
-        assert!(compactar_historico(&mut m) > 0);
+        assert!(compacta(&mut m) > 0);
         volta(&mut m, 1000);
-        assert_eq!(compactar_historico(&mut m), 0);
+        assert_eq!(compacta(&mut m), 0);
         assert_eq!(m.iter().filter(|x| eh_marcador(x)).count(), 1, "the marker must stay");
     }
 
     #[test]
     fn recompactar_substitui_o_marcador_sem_acumular() {
         let mut m = sessao(400);
-        compactar_historico(&mut m);
+        compacta(&mut m);
         // Sessão segue crescendo e estoura de novo.
         for i in 0..300 {
             m.push(Message::user(format!("mais {i}")));
         }
-        compactar_historico(&mut m);
+        compacta(&mut m);
         let marcadores = m
             .iter()
             .filter(|x| x.role == "system" && x.content.starts_with(MARCADOR))
@@ -425,7 +636,7 @@ mod tests {
         // que o /code/chat aceita (max:200) — com folga.
         for n in [149, 150, 151, 199, 200, 201, 500, 2000] {
             let mut m = sessao(n);
-            compactar_historico(&mut m);
+            compacta(&mut m);
             assert!(m.len() <= 200, "n={n} resultou em {}", m.len());
         }
     }

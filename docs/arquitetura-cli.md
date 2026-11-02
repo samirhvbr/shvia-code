@@ -80,7 +80,11 @@ There is no eventsource-stream, ratatui or thiserror dependency. SSE framing is 
 1. Add the user input; clear prior-turn images when a JSON host submits a new turn.
 2. Compact long message history: past 150 messages, cut down to 100, preserving the
    initial system context and the session's first and latest requests, and avoiding
-   orphan tool results.
+   orphan tool results. Since 0.15.0 the budget comes from the gateway's `model` event
+   when it sends one: the count scales with `messages_max`, and a known `context_window`
+   adds a token budget (cut past 70%, down to 50%, calibrated by the real `prompt_tokens`).
+   A provider refusal (`codigo: provedor_recusou_pedido`) is retried once with a harder cut.
+   Details: [protocol](protocolo.md) §2.
 3. Call `/api/v1/code/chat` with the current profile/effort and runner's tool definitions.
    A failure before the stream opens that clears by itself (429/408/502/503/504, or no
    connection at all) is retried up to 4 times, waiting the gateway's `Retry-After` or a

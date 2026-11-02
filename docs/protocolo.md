@@ -64,6 +64,22 @@ the session's first and latest `user` messages, and avoiding orphan tool results
 server's 200-message limit and these client numbers form a shared contract; changing one
 requires checking the other.
 
+**Budget from the gateway (0.15.0+).** When the `model` event carries `messages_max` and
+`context_window`, the client budgets against them instead of the fixed numbers:
+
+- the count ceiling becomes `messages_max` (cut past 3/4, down to 1/2). Without a window
+  the count stays capped at 200, because a count is then the only budget;
+- with a window, the history is also cut when its estimate passes 70% of the window, down
+  to 50%. The estimate is chars/4 of the messages and tool definitions, scaled by the last
+  `usage.prompt_tokens` divided by the chars/4 of the request that produced it (clamped to
+  0.3–4). A token cut never removes the latest assistant turn and its tool results;
+- an SSE `error` with `codigo: "provedor_recusou_pedido"` (the provider refused the request
+  itself, as Ollama does for a prompt over `num_ctx`) is retried **once** in the same round,
+  with the history cut to half of the estimate just sent. Any other cause fails the same
+  way again and is reported.
+
+An older gateway sends neither field and the client behaves as 0.13.6–0.14.x.
+
 ### Imagem no turno do usuário (0.11.4+)
 
 `images` é **opcional**, só existe em `role:"user"` e leva **base64 puro** — sem o
@@ -103,12 +119,12 @@ data: {"kind":"<tipo>","data":{...}}
 
 | `kind` | quando | `data` |
 |--------|--------|--------|
-| `model` | 1º, sempre | `{name, model, server, server_label, target_source, request_id}` — cabeçalho da sessão |
+| `model` | 1º, sempre | `{name, model, server, server_label, target_source, request_id, messages_max?, context_window?}` — cabeçalho da sessão; the last two (sent since the shvia-web change of 02/11/2026; absent before) are the target's per-request message ceiling and effective context window in tokens (`null` when unknown) |
 | `text_delta` | streaming da resposta | `{delta:"<pedaço de texto>"}` — concatenar |
 | `reasoning_delta` | modelos com "pensar" | `{delta:"..."}` — pensamento; o CLI pode mostrar esmaecido ou ocultar |
 | `tool_call` | modelo pediu ferramenta | `{id, name, arguments:{...}}` — **arguments já é objeto** (decodificado) |
 | `usage` | antes do `done` | `{prompt_tokens, completion_tokens, total_tokens, thinking_time_ms, response_time_ms, effort, cost, cost_estimated}` |
-| `error` | falha | `{message:"..."}` — seguido de `done` |
+| `error` | falha | `{message:"...", codigo?, status?}` — seguido de `done`; `codigo` classifies it (`provedor_recusou_pedido` = 4xx from the provider, `provedor_indisponivel` = 5xx) |
 | `done` | fim, sempre | `{text:"<resposta completa>", tool_calls:[{id,name,arguments}]}` |
 
 - **`cost` vs `cost_estimated`** (padrão 2.15.9): `cost` = custo real (US$, provedor

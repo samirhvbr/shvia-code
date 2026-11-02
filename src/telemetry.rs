@@ -1,7 +1,7 @@
 //! Tokens/custo por turno (do evento `usage`; padrão 2.15.9: `US$` exato quando
 //! o provedor informa, `≈US$` estimado quando cai no tokens×pricing).
 
-use crate::types::Usage;
+use crate::types::{Limites, Usage};
 
 #[derive(Default)]
 pub struct Telemetry {
@@ -11,6 +11,14 @@ pub struct Telemetry {
     /// Último modelo reportado pelo gateway (evento `model`) — persistido na
     /// sessão para o "modelo favorito" do `anna stats`.
     pub model: Option<String>,
+    /// The target's limits from the last `model` event (0.15.0). Kept across turns, so the
+    /// first request of the next turn is already budgeted against the right window.
+    pub limites: Limites,
+    /// Real `prompt_tokens` ÷ the chars/4 estimate of the request that produced them: scales
+    /// the estimate of the next request (tokenizers, the gateway's tool-output compression and
+    /// its own system prompt all move the real number away from chars/4). `None` until the
+    /// first response that reports `prompt_tokens`.
+    pub fator_tokens: Option<f64>,
 }
 
 impl Telemetry {

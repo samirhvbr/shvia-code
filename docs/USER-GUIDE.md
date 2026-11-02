@@ -132,7 +132,9 @@ Normal REPL turns autosave under `~/.shvia-code/sessions/`, after every round th
 tools and when the turn ends (0.14.0+; before, only when the turn ended). JSON contains the message
 history retained by the loop, first-prompt title, usage totals and model metadata.
 The loop compacts long history: past 150 messages it cuts down to 100, keeping the
-session's first request and the latest one; this is not an immutable full transcript. Since
+session's first request and the latest one. Since 0.15.0, when the gateway reports the
+model's context window, the history is also cut when it fills 70% of it (down to 50%), and
+a request the provider refuses (usually a full context) is retried once with a harder cut; this is not an immutable full transcript. Since
 0.13.8 the history also keeps the assistant's final answers (an empty one is left out), so a
 resumed session and the next request carry what the assistant already said. On Unix, the store applies `0700` to its directory and `0600`
 to files. Saves are best effort. There is no scheduled expiration or cloud sync.

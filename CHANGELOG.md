@@ -3,6 +3,43 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.0 - Budget the history against the target's context window and retry once when the provider refuses the request
+
+The only budget was a count: past 150 messages, cut to 100, sized for the gateway's
+200-message validation and blind to tokens. A local model served with `num_ctx` 32k got up to
+150 messages; Ollama then either cut the start of the prompt in silence or, with
+`truncate:false` (on by default since 08/08/2026), refused with a 400 that ended the turn. The
+gateway has classified that refusal since 22/09/2026 (`codigo: provedor_recusou_pedido`, with
+a comment saying `anna` could read the error but never handle it), and it knows the target's
+window (`ModelMetadata::contextWindow`), but neither reached the client.
+
+- **The `model` event's `messages_max` and `context_window` set the budget** (both optional;
+  the matching shvia-web change sends them). The count ceiling becomes `messages_max` (cut past
+  3/4, down to 1/2); without a window it stays capped at 200, since a count is then the only
+  budget. With a window the history is also cut when its estimate passes 70% of it, down to
+  50%, so cuts stay rare and the prefix stays cacheable.
+- **The estimate is calibrated by the provider's own count:** chars/4 of the messages and tool
+  definitions, scaled by the last `usage.prompt_tokens` over the chars/4 of the request that
+  produced it (clamped to 0.3–4), which absorbs the tokenizer, the gateway's tool-output
+  compression and its system prompt. The limits and the factor live in `Telemetry`, so the
+  next turn starts already budgeted.
+- **A token cut keeps what the model is about to act on:** the latest assistant turn and its
+  tool results always stay, with the first and the latest requests and the single marker,
+  which now says whether the cut was for the gateway's ceiling or the model's window.
+- **A provider refusal is retried once in the same round**, with the history cut to half of
+  what was just sent, and a warning that says so. Classified by the gateway's code, never by
+  the provider's wording. Any other cause fails the same way again and is reported as before.
+- An older gateway sends neither field and nothing changes: the count is the 0.13.6 one.
+
+Hermes budgets by window fraction (50–75%) and claw-code recovers from overflow reactively;
+this takes both, without a summarizing model (comparison of 02/11/2026). Tests:
+`com_a_janela_conhecida_o_corte_e_por_tokens_e_guarda_o_que_importa`,
+`o_evento_model_traz_os_limites_do_alvo` and, against the scripted gateway,
+`a_provider_refusal_is_retried_once_with_a_shorter_history`. Reversals, each red: no token
+budget, no recovery. The existing count tests caught a regression on the way (the latest-turn
+guard had leaked into the count cut). Docs: `docs/protocolo.md` §2–§3, `docs/arquitetura-cli.md`
+§4, `docs/USER-GUIDE.md`.
+
 ## 0.14.0 - Stop a turn with Ctrl-C or the host's cancel without killing anna, and save each round
 
 Nothing handled SIGINT during a turn. Ctrl-C ended `anna` itself; the REPL saved the session

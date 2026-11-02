@@ -42,6 +42,10 @@ pub struct TurnResult {
     pub retentavel: bool,
     /// The gateway's `Retry-After`, in seconds (Laravel's throttle sends it with every 429).
     pub retry_after: Option<Duration>,
+    /// What the gateway said about the target (0.15.0); default when it said nothing.
+    pub limites: crate::types::Limites,
+    /// The SSE error's classification (`provedor_recusou_pedido`, …), when it came with one.
+    pub codigo: Option<String>,
     /// The person stopped the turn while the request was being sent or streamed (0.14.0).
     /// `text` holds what was already shown; tool calls of a cut-off answer are dropped.
     pub interrompido: bool,
@@ -183,14 +187,18 @@ pub async fn code_chat(
                 let Ok(raw) = serde_json::from_str::<RawEvent>(json) else { continue };
                 let ev = Event::from_raw(raw);
                 match &ev {
-                    Event::Model { model, server_label } => {
+                    Event::Model { model, server_label, limites } => {
                         result.model = Some(model.clone());
                         result.server_label = Some(server_label.clone());
+                        result.limites = *limites;
                     }
                     Event::TextDelta(d) => result.text.push_str(d),
                     Event::ToolCall(c) => result.tool_calls.push(c.clone()),
                     Event::Usage(u) => result.usage = Some(u.clone()),
-                    Event::Error(e) => result.error = Some(e.clone()),
+                    Event::Error { message, codigo } => {
+                        result.error = Some(message.clone());
+                        result.codigo = codigo.clone();
+                    }
                     Event::Done { text, tool_calls } => {
                         if result.text.is_empty() {
                             result.text = text.clone();
@@ -248,6 +256,24 @@ mod tests {
         assert!(serde_json::to_string(&com).unwrap().contains("\"effort\":\"high\""));
         let sem = ChatRequest { messages: &msgs, tools: vec![], profile_name: None, effort: None };
         assert!(!serde_json::to_string(&sem).unwrap().contains("effort"));
+    }
+
+    #[test]
+    fn o_evento_model_traz_os_limites_do_alvo() {
+        use crate::types::Limites;
+        let com: RawEvent = serde_json::from_str(
+            r#"{"kind":"model","data":{"model":"m","server_label":"S","messages_max":5000,"context_window":32768}}"#,
+        )
+        .unwrap();
+        let sem: RawEvent = serde_json::from_str(r#"{"kind":"model","data":{"model":"m","server_label":"S"}}"#).unwrap();
+        match (Event::from_raw(com), Event::from_raw(sem)) {
+            (Event::Model { limites: a, .. }, Event::Model { limites: b, .. }) => {
+                assert_eq!(a, Limites { mensagens: Some(5000), janela: Some(32768) });
+                // An older gateway says nothing: the client keeps the count it always used.
+                assert_eq!(b, Limites::default());
+            }
+            _ => panic!("esperava Model"),
+        }
     }
 
     #[test]

@@ -122,6 +122,99 @@ enum Motivo {
     JanelaDoModelo,
 }
 
+/// What a compaction did: messages dropped, tool outputs replaced by a stub, and why.
+#[derive(Debug, Default)]
+struct Corte {
+    removidas: usize,
+    podadas: usize,
+    motivo: Option<Motivo>,
+}
+
+/// Prefix of a pruned tool output (so it is never pruned twice).
+const PODADA: &str = "[saída antiga";
+/// Outputs smaller than this are kept: a stub would save little and lose the detail.
+const PODA_MINIMO: usize = 600;
+
+/// Replaces old, large tool outputs with a one-line stub before any message is dropped
+/// (0.15.1). The trail of what was done stays — each call and a line saying what came back —
+/// and only the bulk goes; dropping messages loses both. Two kinds:
+///
+/// - a `read_file` whose file a later `edit_file`/`write_file` changed: its content is stale
+///   anyway, and a model that trusts it edits against text that is no longer there;
+/// - outputs older than the protected tail (`protegido` tokens counted back from the end, and
+///   always the latest assistant turn with its results) and larger than `PODA_MINIMO`.
+///
+/// Hermes prunes the same way before summarizing, and claw-code drops superseded reads
+/// (comparison of 02/11/2026). Runs only when the token budget triggers, so the prefix
+/// changes rarely.
+fn podar_saidas(messages: &mut [Message], cabeca: usize, orc: &Orcamento, protegido: u64) -> usize {
+    use std::collections::HashMap;
+    // Who asked for each result, and where: the result only carries the call id.
+    let mut chamadas: HashMap<String, (usize, String, serde_json::Value)> = HashMap::new();
+    for (i, m) in messages.iter().enumerate() {
+        for c in &m.tool_calls {
+            chamadas.insert(c.id.clone(), (i, c.name.clone(), c.arguments.clone()));
+        }
+    }
+    let caminho = |a: &serde_json::Value| a.get("path").and_then(|p| p.as_str()).map(str::to_string);
+    // The last index at which each path was written.
+    let mut escrito: HashMap<String, usize> = HashMap::new();
+    for (i, m) in messages.iter().enumerate() {
+        for c in m.tool_calls.iter().filter(|c| c.name == "edit_file" || c.name == "write_file") {
+            if let Some(p) = caminho(&c.arguments) {
+                escrito.insert(p, i);
+            }
+        }
+    }
+
+    let ultimo_assistente =
+        (cabeca..messages.len()).rev().find(|&i| messages[i].role == "assistant").unwrap_or(messages.len());
+    let mut limite = ultimo_assistente;
+    let mut soma = 0u64;
+    while limite > cabeca {
+        soma += orc.tokens_de(&messages[limite - 1]);
+        if soma > protegido {
+            break;
+        }
+        limite -= 1;
+    }
+
+    let mut podadas = 0;
+    for (i, m) in messages.iter_mut().enumerate().take(ultimo_assistente).skip(cabeca) {
+        if m.role != "tool" || m.content.starts_with(PODADA) {
+            continue;
+        }
+        let Some((pedido_em, nome, args)) = m.tool_call_id.as_ref().and_then(|id| chamadas.get(id)) else {
+            continue;
+        };
+        let velha = nome == "read_file"
+            && caminho(args).and_then(|p| escrito.get(&p)).is_some_and(|&w| w > *pedido_em)
+            && m.content.len() > 200;
+        let antiga = i < limite && m.content.len() > PODA_MINIMO;
+        let stub = if velha {
+            format!(
+                "{PODADA}: conteúdo de {} lido antes de o arquivo ser alterado (edit_file/write_file) — releia se precisar.]",
+                caminho(args).unwrap_or_default()
+            )
+        } else if antiga {
+            let alvo = caminho(args)
+                .or_else(|| args.get("command").and_then(|c| c.as_str()).map(|c| format!("`{}`", c.chars().take(80).collect::<String>())))
+                .or_else(|| args.get("pattern").and_then(|c| c.as_str()).map(|c| format!("'{}'", c.chars().take(80).collect::<String>())))
+                .map(|a| format!(" {a}"))
+                .unwrap_or_default();
+            format!(
+                "{PODADA}: {nome}{alvo} devolveu {} caracteres, removidos para caber na janela do modelo — rode de novo se precisar.]",
+                m.content.len()
+            )
+        } else {
+            continue;
+        };
+        m.content = stub;
+        podadas += 1;
+    }
+    podadas
+}
+
 /// Real `prompt_tokens` ÷ the chars/4 estimate of the request that produced them, clamped
 /// so one odd response (a provider that counts nothing, a huge image) cannot swing the
 /// budget by orders of magnitude.
@@ -159,19 +252,32 @@ fn eh_marcador(m: &Message) -> bool {
 ///   (without it, the model "remembers" what is no longer there and hallucinates).
 ///
 /// Below both triggers nothing changes, including the marker of an earlier cut.
-/// Returns how many messages left (0 = nothing to do) and why.
-fn compactar_historico(messages: &mut Vec<Message>, orc: &Orcamento) -> (usize, Option<Motivo>) {
+/// When the tokens triggered, old tool outputs are pruned first (`podar_saidas`), and
+/// messages are dropped only if that was not enough.
+fn compactar_historico(messages: &mut Vec<Message>, orc: &Orcamento) -> Corte {
     let gatilho = orc.teto_mensagens * COMPACTA_EM / TETO_PADRAO;
     let alvo = orc.teto_mensagens * COMPACTA_PARA / TETO_PADRAO;
     let por_contagem = messages.len() > gatilho;
-    let por_tokens = orc.tokens.filter(|&(acima, _)| orc.estimar(messages) > acima).map(|(_, alvo)| alvo);
+    let mut por_tokens = orc.tokens.filter(|&(acima, _)| orc.estimar(messages) > acima).map(|(_, alvo)| alvo);
     if !por_contagem && por_tokens.is_none() {
-        return (0, None);
+        return Corte::default();
     }
 
     // Head = the run of `system` messages at the START (seed prompt + context). A
     // `system` in the middle of the history (e.g. a loop nudge) counts as conversation.
     let cabeca = messages.iter().take_while(|m| m.role == "system" && !eh_marcador(m)).count();
+
+    let mut podadas = 0;
+    if let Some(alvo_tokens) = por_tokens {
+        // The recent outputs (40% of the target, ~20% of the window) stay whole.
+        podadas = podar_saidas(messages, cabeca, orc, alvo_tokens * 2 / 5);
+        if orc.estimar(messages) <= alvo_tokens {
+            por_tokens = None;
+            if !por_contagem {
+                return Corte { removidas: 0, podadas, motivo: Some(Motivo::JanelaDoModelo) };
+            }
+        }
+    }
 
     // Window = the most recent messages that fit in the count target, leaving room for
     // the marker and the two kept requests...
@@ -221,7 +327,8 @@ fn compactar_historico(messages: &mut Vec<Message>, orc: &Orcamento) -> (usize, 
         .filter(|&i| !eh_marcador(&messages[i]) && !mantidos.contains(&i))
         .count();
     if removidas == 0 {
-        return (0, None);
+        let motivo = (podadas > 0).then_some(Motivo::JanelaDoModelo);
+        return Corte { removidas: 0, podadas, motivo };
     }
     let motivo = if por_tokens.is_some() { Motivo::JanelaDoModelo } else { Motivo::TetoDoGateway };
     let onde = match motivo {
@@ -250,22 +357,32 @@ fn compactar_historico(messages: &mut Vec<Message>, orc: &Orcamento) -> (usize, 
     messages.extend(pedidos_mantidos);
     messages.push(marcador);
     messages.append(&mut janela);
-    (removidas, Some(motivo))
+    Corte { removidas, podadas, motivo: Some(motivo) }
 }
 
 /// The gateway's code for a request the provider refused as such (4xx), `CodigoDeErro` in
 /// SHVIA-WEB. A context overflow is the case that matters here.
 const PROVEDOR_RECUSOU: &str = "provedor_recusou_pedido";
 
-fn avisar_corte(fe: &mut dyn Frontend, (cortadas, motivo): (usize, Option<Motivo>)) {
-    let Some(motivo) = motivo.filter(|_| cortadas > 0) else { return };
+fn avisar_corte(fe: &mut dyn Frontend, c: &Corte) {
+    let Some(motivo) = &c.motivo else { return };
     let onde = match motivo {
         Motivo::TetoDoGateway => "teto do gateway",
         Motivo::JanelaDoModelo => "janela de contexto do modelo",
     };
+    let mut partes = Vec::new();
+    if c.podadas > 0 {
+        partes.push(format!("{} saídas antigas de ferramenta viraram resumo de uma linha", c.podadas));
+    }
+    if c.removidas > 0 {
+        partes.push(format!("{} mensagens antigas saíram do contexto", c.removidas));
+    }
+    if partes.is_empty() {
+        return;
+    }
     fe.warn(&format!(
-        "histórico compactado: {cortadas} mensagens antigas saíram do contexto \
-         ({onde}); seus pedidos ficaram e o modelo foi avisado do corte."
+        "histórico compactado ({onde}): {}; seus pedidos ficaram e o modelo foi avisado.",
+        partes.join(" e ")
     ));
 }
 
@@ -352,7 +469,7 @@ pub async fn run_turn(
         let defs = runner.tool_defs();
         let defs_chars = serde_json::to_string(&defs).map(|s| s.len()).unwrap_or(0);
         let orc = Orcamento::para(&telemetry.limites, telemetry.fator_tokens, defs_chars);
-        avisar_corte(fe, compactar_historico(messages, &orc));
+        avisar_corte(fe, &compactar_historico(messages, &orc));
         let mut tentativa = 0;
         let mut recuperou = false;
         let result = loop {
@@ -376,13 +493,13 @@ pub async fn run_turn(
             if r.codigo.as_deref() == Some(PROVEDOR_RECUSOU) && !recuperou {
                 recuperou = true;
                 let forcado = Orcamento::para(&telemetry.limites, telemetry.fator_tokens, defs_chars).forcado(messages);
-                let (cortadas, motivo) = compactar_historico(messages, &forcado);
-                if cortadas > 0 {
+                let corte = compactar_historico(messages, &forcado);
+                if corte.removidas + corte.podadas > 0 {
                     fe.warn(&format!(
                         "o provedor recusou o pedido ({}) — compactando o histórico e tentando de novo.",
                         r.error.as_deref().unwrap_or("sem detalhe")
                     ));
-                    avisar_corte(fe, (cortadas, motivo));
+                    avisar_corte(fe, &corte);
                     continue;
                 }
             }
@@ -465,7 +582,7 @@ mod tests {
 
     /// The cut as it ran before 0.15.0: no limits from the gateway, count only.
     fn compacta(m: &mut Vec<Message>) -> usize {
-        compactar_historico(m, &Orcamento::padrao()).0
+        compactar_historico(m, &Orcamento::padrao()).removidas
     }
 
     #[test]
@@ -475,29 +592,67 @@ mod tests {
         assert_eq!(Orcamento::para(&Limites { mensagens: Some(5000), janela: None }, None, 0).teto_mensagens, 200);
         assert_eq!(Orcamento::para(&Limites { mensagens: Some(5000), janela: Some(32_000) }, None, 0).teto_mensagens, 5000);
 
-        // 40 rounds of 2 000-char tool outputs (~500 tokens each) against a 16k window: far
-        // under the 150-message count, far over the 70% token trigger.
+        // 120 rounds of 500-char tool outputs (small enough that pruning leaves them alone)
+        // against a 16k window: far under the 3 750-message count, over the 70% token trigger.
         let orc = Orcamento::para(&Limites { mensagens: Some(5000), janela: Some(16_000) }, Some(1.0), 0);
         let mut m = vec![Message::system("prompt-semente"), Message::user("corrija o parcelamento")];
-        for i in 0..40 {
+        for i in 0..120 {
             m.push(Message::assistant(format!("lendo {i}"), vec![]));
-            m.push(Message::tool(format!("id-{i}"), "x".repeat(2000)));
+            m.push(Message::tool(format!("id-{i}"), "x".repeat(500)));
         }
         m.push(Message::user("continua"));
         m.push(Message::assistant("lendo de novo", vec![]));
-        m.push(Message::tool("id-final", "y".repeat(2000)));
+        m.push(Message::tool("id-final", "y".repeat(500)));
         assert!(orc.estimar(&m) > 11_200, "the fixture must start over the trigger");
 
-        let (cortadas, motivo) = compactar_historico(&mut m, &orc);
-        assert!(cortadas > 0);
-        assert_eq!(motivo, Some(Motivo::JanelaDoModelo));
+        let corte = compactar_historico(&mut m, &orc);
+        assert!(corte.removidas > 0);
+        assert_eq!(corte.motivo, Some(Motivo::JanelaDoModelo));
         assert!(orc.estimar(&m) <= 8_000, "cut down to the 50% target, got {}", orc.estimar(&m));
         assert!(tem(&m, "user", "corrija o parcelamento") && tem(&m, "user", "continua"));
         assert_eq!(m.last().unwrap().tool_call_id.as_deref(), Some("id-final"), "the latest round stays");
         let marcador = m.iter().find(|x| eh_marcador(x)).unwrap();
         assert!(marcador.content.contains("janela de contexto do modelo"), "{}", marcador.content);
         // The very next round has nothing to cut: the target sits well under the trigger.
-        assert_eq!(compactar_historico(&mut m, &orc).0, 0);
+        assert_eq!(compactar_historico(&mut m, &orc).removidas, 0);
+    }
+
+    #[test]
+    fn saida_velha_vira_resumo_antes_de_qualquer_mensagem_sair() {
+        use crate::types::{Limites, ToolCall};
+        let chamada = |id: &str, nome: &str, path: &str| ToolCall {
+            id: id.into(),
+            name: nome.into(),
+            arguments: serde_json::json!({ "path": path }),
+        };
+        // 30 reads of 2 000 chars (~500 tokens each) against a 16k window: over the trigger.
+        let orc = Orcamento::para(&Limites { mensagens: Some(5000), janela: Some(16_000) }, Some(1.0), 0);
+        let mut m = vec![Message::system("prompt-semente"), Message::user("corrija o parcelamento")];
+        for i in 0..30 {
+            m.push(Message::assistant("", vec![chamada(&format!("r{i}"), "read_file", &format!("src/f{i}.rs"))]));
+            m.push(Message::tool(format!("r{i}"), "x".repeat(2000)));
+        }
+        // A recent read of src/f29.rs, then an edit of it: that read is stale.
+        m.push(Message::assistant("", vec![chamada("e1", "edit_file", "src/f29.rs")]));
+        m.push(Message::tool("e1", "ok (1 hunks)"));
+        m.push(Message::assistant("", vec![chamada("last", "read_file", "src/g.rs")]));
+        m.push(Message::tool("last", "z".repeat(2000)));
+        let antes = m.len();
+
+        let corte = compactar_historico(&mut m, &orc);
+        assert_eq!(corte.removidas, 0, "pruning was enough: no message leaves");
+        assert_eq!(m.len(), antes);
+        assert!(corte.podadas > 20, "{corte:?}");
+        assert!(orc.estimar(&m) <= 8_000, "down to the 50% target, got {}", orc.estimar(&m));
+        let conteudo = |id: &str| m.iter().find(|x| x.tool_call_id.as_deref() == Some(id)).unwrap().content.clone();
+        assert!(conteudo("r0").starts_with(PODADA) && conteudo("r0").contains("read_file src/f0.rs"), "{}", conteudo("r0"));
+        assert!(conteudo("r29").contains("lido antes de o arquivo ser alterado"), "a stale read goes even when recent: {}", conteudo("r29"));
+        assert_eq!(conteudo("r28"), "x".repeat(2000), "recent outputs stay whole");
+        assert_eq!(conteudo("last"), "z".repeat(2000), "the latest round stays whole");
+        // Pruning twice changes nothing, so the prefix stays stable between cuts.
+        let depois = m.clone();
+        compactar_historico(&mut m, &orc);
+        assert_eq!(m.iter().map(|x| &x.content).collect::<Vec<_>>(), depois.iter().map(|x| &x.content).collect::<Vec<_>>());
     }
 
     fn sessao(n_conversa: usize) -> Vec<Message> {

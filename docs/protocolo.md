@@ -72,7 +72,11 @@ requires checking the other.
 - with a window, the history is also cut when its estimate passes 70% of the window, down
   to 50%. The estimate is chars/4 of the messages and tool definitions, scaled by the last
   `usage.prompt_tokens` divided by the chars/4 of the request that produced it (clamped to
-  0.3–4). A token cut never removes the latest assistant turn and its tool results;
+  0.3–4). A token cut never removes the latest assistant turn and its tool results.
+  Before dropping any message it prunes (0.15.1+): a `read_file` result whose file a later
+  `edit_file`/`write_file` changed, and outputs over 600 characters older than the recent
+  ~20% of the window, become a one-line `[saída antiga: …]` stub naming the tool and its
+  target. Messages are dropped only if pruning was not enough;
 - an SSE `error` with `codigo: "provedor_recusou_pedido"` (the provider refused the request
   itself, as Ollama does for a prompt over `num_ctx`) is retried **once** in the same round,
   with the history cut to half of the estimate just sent. Any other cause fails the same

@@ -3,6 +3,34 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.1 - Prune old and stale tool outputs to one-line stubs before dropping any message
+
+0.15.0 made the window a budget, but the only way to fit it was still to drop whole messages,
+which loses the trail of what was done along with the bulk of what came back. Most of a coding
+turn's tokens are tool outputs: file reads, searches, command logs. Hermes prunes old tool
+outputs before it summarizes, and claw-code drops reads that a later write made stale
+(comparison of 02/11/2026).
+
+- When the token budget triggers, tool outputs are pruned first: a `read_file` whose file a
+  later `edit_file`/`write_file` changed (its content is stale, and a model that trusts it
+  edits against text that is no longer there), and outputs over 600 characters older than the
+  recent ~20% of the window. Each becomes one line naming the tool and its target —
+  `[saída antiga: read_file src/x.rs devolveu 2000 caracteres, removidos para caber na janela
+  do modelo — rode de novo se precisar.]` — so the call and the fact that it ran stay.
+- Messages are dropped only if pruning was not enough. The latest assistant turn and its
+  results are never pruned, a stub is never pruned twice, and pruning runs only when the
+  budget triggers, so the prefix the provider caches changes rarely.
+- The warning says what happened: outputs summarized, messages dropped, or both.
+- Without a known window (older gateway, unknown model) nothing changes: the count cut is
+  the 0.13.6 one, and the count cut never prunes.
+
+Test: `saida_velha_vira_resumo_antes_de_qualquer_mensagem_sair` (30 reads against a 16k window:
+no message leaves, 20+ outputs become stubs, the stale recent read goes, the other recent
+reads and the latest round stay whole, and a second pass changes nothing). The 0.15.0 token
+test now uses outputs small enough to stay whole, so it still measures the drop. Reversals,
+each red: no pruning, no stale-read rule. Docs: `docs/protocolo.md` §2,
+`docs/arquitetura-cli.md` §4, `docs/USER-GUIDE.md`.
+
 ## 0.15.0 - Budget the history against the target's context window and retry once when the provider refuses the request
 
 The only budget was a count: past 150 messages, cut to 100, sized for the gateway's

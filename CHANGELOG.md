@@ -3,6 +3,42 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.14.0 - Stop a turn with Ctrl-C or the host's cancel without killing anna, and save each round
+
+Nothing handled SIGINT during a turn. Ctrl-C ended `anna` itself; the REPL saved the session
+only after the turn, so the whole turn's history was lost; and a running `bash` child kept
+going on its own, because it runs in its own process group, out of the terminal's reach. A
+host had no way to stop a turn short of killing the sidecar. Hermes and claw-code both stop
+the turn and keep the transcript valid (comparison of 02/11/2026).
+
+- **One stop flag** (`src/interrupcao.rs`), raised by Ctrl-C in the terminal (REPL and `-p`)
+  or by `{"type":"cancel"}` from an NDJSON host, and checked where the turn waits: the
+  request and the stream (dropped, closing the connection), the 0.13.10 retry wait, between
+  tool calls, inside `bash` (which kills its process group, even with `bash_timeout = 0`),
+  and while a host decides a gate or runs a command.
+- **The history stays valid.** A cut-off answer is kept as an assistant message with what was
+  already shown, marked `[interrompido pelo usuário]`, and its tool calls are dropped unrun.
+  Every tool call not yet run gets `RECUSADO: o usuário interrompeu o turno…`, so the next
+  request carries no orphan call. The turn ends with `turn_end`, never an error.
+- **A second Ctrl-C ends `anna`** (exit 130), as does Ctrl-C when no turn runs: the way out
+  of anything that does not look at the flag. At the REPL prompt Ctrl-C still exits as before.
+- **NDJSON (protocol addition, hence 0.14.0):** one engine thread reads stdin, so `cancel`
+  reaches a streaming turn; other lines are queued in order. `cancel` also stops a `user` turn
+  already queued and is ignored when nothing runs; `exit` also stops the turn in progress. A
+  stopped turn emits `{"type":"interrupted"}` before `usage` and `turn_done`. Old hosts that
+  never send `cancel` see no change.
+- **The REPL saves the session after every round that ran tools**, and again when the turn
+  ends. `run_turn` gained `ao_fim_da_volta` for that; the planning pipeline stops when any
+  phase is interrupted, instead of acting on a cut-short plan.
+
+`tokio` gains `signal` (its `signal-hook-registry` was already in the lockfile through
+crossterm). Tests, against the scripted gateway: `ctrl_c_stops_the_turn_not_anna_and_each_round_is_saved_before_the_turn_ends`
+(a real SIGINT to the REPL) and `ndjson_cancel_kills_the_running_command_and_answers_every_pending_call`
+(`sleep 30` killed within the test's seconds). Four reversals, each red: no Ctrl-C handler
+(anna dies), no per-round save (no session mid-turn), `bash` ignoring the flag (15 s
+timeout), no synthetic result (the second call runs). Docs: `docs/embedding.md`,
+`docs/USER-GUIDE.md`, `docs/arquitetura-cli.md`, `docs/ferramentas.md`, `SECURITY_GUIDELINES.md`.
+
 ## 0.13.10 - Retry a gateway round that failed before the stream opened, honoring Retry-After
 
 The gateway throttles each key (`/code/chat`, 20 requests per minute by default) and every

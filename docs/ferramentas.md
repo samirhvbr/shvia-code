@@ -167,6 +167,14 @@ check.
 - **Resto**: confirm. Sem shell interativo; captura stdout+stderr (teto de bytes).
   Resultado: saída + exit code.
 
+#### Stopping the turn (0.14.0)
+
+Ctrl-C in the terminal, or `{"type":"cancel"}` from an NDJSON host, kills a running command
+with its whole process group, even with `bash_timeout = 0`, and the model receives
+`ERRO: o usuário interrompeu o turno — o comando foi encerrado`. Before 0.14.0 the child
+kept running: it lives in its own process group, so the terminal's SIGINT never reached it,
+and only `anna` died.
+
 #### Teto de tempo (0.11.9, achado F-04)
 
 Cada `bash` tem **120 s** por padrão. `bash_timeout` no `config.toml`, ou

@@ -103,6 +103,12 @@ for subsequent calls. `/tools` lists the registry. `/clear` starts a new convers
 and session; it does not delete saved sessions or reset frontend approvals.
 `/exit`, `/quit`, `/q`, Ctrl-C at the prompt or EOF exit the REPL.
 
+**Ctrl-C during a turn stops the turn, not `anna`** (0.14.0+). The answer being streamed is
+cut (what was shown stays in the history, marked as interrupted), a running shell command
+is killed with its whole process tree, and tool calls not yet run are answered as refused.
+Then the prompt comes back with the session intact. A second Ctrl-C in the same turn ends
+`anna` (exit 130), the way out of anything that does not stop.
+
 Writes show a numbered diff. Approvals use arrow keys/Enter, numbers, or letter
 shortcuts; Esc and Ctrl-C refuse. Destructive commands default to refusal and cannot
 receive session approval. `t` applies to a tool scope, such as `write_file` or `bash`,
@@ -122,7 +128,8 @@ that every desired test executed.
 
 ## Sessions, checkpoints and statistics
 
-Normal REPL turns autosave under `~/.shvia-code/sessions/`. JSON contains the message
+Normal REPL turns autosave under `~/.shvia-code/sessions/`, after every round that ran
+tools and when the turn ends (0.14.0+; before, only when the turn ended). JSON contains the message
 history retained by the loop, first-prompt title, usage totals and model metadata.
 The loop compacts long history: past 150 messages it cuts down to 100, keeping the
 session's first request and the latest one; this is not an immutable full transcript. Since

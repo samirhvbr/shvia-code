@@ -31,6 +31,7 @@ src/
   types.rs       Request, message, tool and event wire types.
   tools.rs       Eleven-tool registry, file/search/edit/shell/Git/task execution and classification.
   guard.rs       Requested-name denylist and canonical project-path helpers.
+  interrupcao.rs Turn stop flag: Ctrl-C handler, NDJSON stdin reader for `cancel`, turn guard.
   runner.rs      Local/host runners and the read-only role decorator.
   frontend.rs    Frontend trait for rendering and approval decisions.
   gate.rs        Auto/Confirm/Always policy, previews and terminal confirmation helpers.
@@ -92,7 +93,13 @@ There is no eventsource-stream, ratatui or thiserror dependency. SSE framing is 
    the tool results, and repeat. With a final answer, end the turn. The next request
    therefore carries what the assistant already said, and terminal autosave/resume keep
    it; `tests/assistant_history.rs` checks this against a local SSE fixture.
-6. At `max_voltas` (100 by default), the interactive terminal may grant another batch;
+6. A stop (terminal Ctrl-C, NDJSON `cancel`/`exit`; 0.14.0+) is checked in the stream,
+   the retry wait, between tool calls, inside `bash` (which kills its process group) and
+   in gate/host-result waits. The turn then ends with a valid history: a cut-off answer is
+   kept as an assistant message marked interrupted (its tool calls dropped), and each
+   tool call not yet run gets a `RECUSADO` result. The REPL saves the session after every
+   round that ran tools (`run_turn`'s `ao_fim_da_volta`) and after the turn.
+7. At `max_voltas` (100 by default), the interactive terminal may grant another batch;
    JSON hosts end the turn with a warning and can submit a subsequent user turn.
 
 The runner decorator `SomenteLeitura` restricts architect/reviewer tools on both
@@ -108,7 +115,8 @@ precedence and illustrative role profiles. The key can come from environment or 
 The setter applies Unix `0600` before rename but currently writes the temporary file
 before chmod; Windows ACL hardening and keychain integration are not implemented here.
 
-The REPL autosaves retained message history to `~/.shvia-code/sessions/`, with best-effort
+The REPL autosaves retained message history to `~/.shvia-code/sessions/` after every
+round that ran tools and at the end of each turn, with best-effort
 Unix directory/file permissions. This is not a complete immutable transcript or a
 project-bound session registry. One-shot and NDJSON paths do not use this autosave.
 Retention is manual (`sessions clear [--older-than DAYS]`), based on file modification

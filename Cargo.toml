@@ -4,7 +4,7 @@ name = "anna"
 # deste repo — o comentário antigo dizia "o build-local.sh checa" e isso era falso
 # (medido em 20/08: aquele script só olha o version.md do próprio desktop), que é
 # como o bump da 0.11.2 saiu pela metade sem nada acusar.
-version = "0.13.10"
+version = "0.14.0"
 edition = "2021"
 description = "Anna — CLI agêntico de código da Blue3, sobre o gateway do ShvIA (SHVIA-CODE)"
 authors = ["Samir Hanna Verza <samirhv@me.com>"]
@@ -19,7 +19,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }

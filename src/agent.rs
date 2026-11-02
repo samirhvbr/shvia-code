@@ -7,6 +7,7 @@
 use crate::api;
 use crate::config::Config;
 use crate::frontend::Frontend;
+use crate::interrupcao;
 use crate::memory;
 use crate::project::Project;
 use crate::runner::ToolRunner;
@@ -130,11 +131,37 @@ fn registrar_resposta(messages: &mut Vec<Message>, text: &str, tool_calls: &[Too
     messages.push(Message::assistant(text, tool_calls.to_vec()));
 }
 
+/// Closes the history when the person stops the turn while an answer was streaming (0.14.0).
+///
+/// Whatever was already on screen stays, marked as cut, so the next request tells the model
+/// what it had said and that it was stopped. With nothing shown, the note alone keeps the
+/// history alternating: two `user` messages in a row are refused by some providers. Tool
+/// calls of a cut-off answer are dropped and never run.
+fn registrar_interrupcao(messages: &mut Vec<Message>, parcial: &str) {
+    let content = if parcial.trim().is_empty() {
+        format!("{INTERROMPIDO} (antes da resposta)")
+    } else {
+        format!("{parcial}\n\n{INTERROMPIDO}")
+    };
+    messages.push(Message::assistant(content, vec![]));
+}
+
+const INTERROMPIDO: &str = "[interrompido pelo usuário]";
+
+/// The result of a tool call the stop kept from running. Every id in an assistant's
+/// `tool_calls` needs its `role=tool` answer, or the next request carries an orphan call that
+/// strict providers reject.
+pub const NAO_EXECUTADA: &str = "RECUSADO: o usuário interrompeu o turno antes desta ferramenta rodar.";
+
 /// Devolve o TEXTO final do turno (o que o modelo respondeu sem pedir mais
 /// ferramenta). O REPL descarta; o orquestrador precisa — é dali que sai o
 /// artefato JSON das fases arquiteto/revisor. Erro do gateway devolve texto
 /// vazio (o `fe.error` já reportou), o que a fase que espera artefato trata
 /// como "não achei JSON na resposta".
+///
+/// `ao_fim_da_volta` runs after every round that ran tools and when the turn is stopped: the
+/// REPL saves the session there, so a long turn is not lost with the process (0.14.0). Before,
+/// the session was saved only after the turn.
 pub async fn run_turn(
     cfg: &Config,
     messages: &mut Vec<Message>,
@@ -142,7 +169,10 @@ pub async fn run_turn(
     fe: &mut dyn Frontend,
     telemetry: &mut Telemetry,
     runner: &mut dyn ToolRunner,
+    ao_fim_da_volta: &mut dyn FnMut(&[Message], &Telemetry),
 ) -> Result<String> {
+    // A stop (Ctrl-C, or `cancel` from a host) ends this turn, never the process.
+    let _turno = interrupcao::Turno::comecar();
     // Captura opcional (ai-memory): o prompt que abre o turno. No-op sem env.
     if let Some(last) = messages.iter().rev().find(|m| m.role == "user") {
         memory::user_prompt(&last.content);
@@ -160,6 +190,11 @@ pub async fn run_turn(
             teto += lote;
         }
         volta += 1;
+        if interrupcao::pedido() {
+            fe.turno_interrompido();
+            fe.turn_end(telemetry);
+            return Ok(String::new());
+        }
         // A cada volta (as tools da volta anterior somam mensagens): o gateway
         // rejeita >200 itens, e uma sessão que estoura fica presa sem isto.
         let compactadas = compactar_historico(messages);
@@ -174,6 +209,9 @@ pub async fn run_turn(
             fe.waiting();
             let r = api::code_chat(cfg, messages, runner.tool_defs(), &mut |ev| fe.on_event(ev)).await?;
             fe.end_stream();
+            if r.interrompido {
+                break r;
+            }
             // A failure before the stream opened (429 from the per-key throttle, the gateway
             // briefly down) is waited out instead of ending the turn; nothing was shown or
             // run, so repeating the request repeats nothing the person has seen.
@@ -186,12 +224,23 @@ pub async fn run_turn(
                         api::MAX_TENTATIVAS,
                         r.error.as_deref().unwrap_or("falha antes da resposta"),
                     ));
-                    tokio::time::sleep(espera).await;
+                    // A stop during the wait makes the next request return at once.
+                    tokio::select! {
+                        _ = tokio::time::sleep(espera) => {}
+                        _ = interrupcao::esperar() => {}
+                    }
                 }
                 None => break r,
             }
         };
 
+        if result.interrompido {
+            registrar_interrupcao(messages, &result.text);
+            ao_fim_da_volta(messages, telemetry);
+            fe.turno_interrompido();
+            fe.turn_end(telemetry);
+            return Ok(String::new());
+        }
         if let Some(u) = &result.usage {
             telemetry.add(u);
         }
@@ -211,10 +260,23 @@ pub async fn run_turn(
 
         // Modelo pediu ferramentas → o `runner` decide onde executam (local =
         // o anna; host = a casca externa) e devolve o resultado (role=tool).
+        // After a stop, the calls not yet run are answered without running.
         for call in &result.tool_calls {
-            let out = runner.run(call, &project.root, fe);
-            memory::tool_use(&call.name, &call.arguments, &out);
+            let out = if interrupcao::pedido() {
+                fe.tool_result(call, NAO_EXECUTADA);
+                NAO_EXECUTADA.to_string()
+            } else {
+                let out = runner.run(call, &project.root, fe);
+                memory::tool_use(&call.name, &call.arguments, &out);
+                out
+            };
             messages.push(Message::tool(call.id.clone(), out));
+        }
+        ao_fim_da_volta(messages, telemetry);
+        if interrupcao::pedido() {
+            fe.turno_interrompido();
+            fe.turn_end(telemetry);
+            return Ok(String::new());
         }
     }
 

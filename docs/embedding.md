@@ -35,7 +35,8 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | Linha | Quando |
 |-------|--------|
 | `{"type":"user","text":"...","images":["BASE64"]}` | starts a persistent turn; `images` is optional, pure base64 without a data URL prefix |
-| `{"type":"exit"}` | encerra o motor |
+| `{"type":"exit"}` | encerra o motor (0.14.0+: also stops the turn in progress first) |
+| `{"type":"cancel"}` | **stops the turn in progress** (0.14.0+): the stream is dropped, a running `bash` is killed with its process group, a pending gate is refused, and every tool call not yet run gets a `RECUSADO` result; then `interrupted`, `usage`, `turn_done`. Also stops a `user` turn already queued; ignored when nothing is running or queued |
 | `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`** (hosts should correlate IDs; this engine currently consumes the next decision without enforcing its ID) |
 | `{"id":"…","decision":"continue"\|"stop","message":"…"}` | **answer to a `stop_request`** (engines that hold a turn open — see the handshake below; `anna` never asks) |
 
@@ -50,6 +51,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | `gate_request` | `id`, `scope`, `policy`, `preview` | **pede aprovação** — o motor BLOQUEIA até a decisão (`id` = o `tool_call.id`, casa com o `tool_result`) |
 | `usage` | `tokens`, `cost`, `estimated` | cumulative telemetry since this process started, not a per-turn delta |
 | `turn_done` | — | turno terminou; pode mandar o próximo `user` |
+| `interrupted` | — | (0.14.0+) the turn was stopped by `cancel`/`exit`; `usage` and `turn_done` follow. What already ran stays done; the history stays valid for the next `user` |
 | `stop_request` | `id`, `iteration`, `last`, `reason` | **optional, per engine** — the model wants to end the turn and the engine asks the host whether to continue; **BLOCKS** until the answer. `anna` does not emit it |
 | `error` / `warn` | `message` | erro fatal do turno / aviso |
 
@@ -73,8 +75,10 @@ The stdin stream is sequential. Normal completion emits `turn_done` before the n
 `user` turn; meanwhile, answer the current gate or host tool result. Current HTTP/SSE
 error paths can emit `error` without `turn_done`, so the host must also handle that
 terminal error and process exit instead of waiting indefinitely for completion.
-During gate/result waits the engine reads stdin itself and can consume/discard
-unrelated lines; it does not maintain a queue of future turns. JSON state lasts only
+Since 0.14.0 one engine thread reads stdin, so a `cancel` reaches a turn that is streaming
+or running a tool; other lines are queued in order for whoever reads next (the main loop,
+a gate, or a host tool result). A gate or result wait still discards lines that are not its
+answer. JSON state lasts only
 as long as the process, and `anna sessions resume` does not restore it.
 
 ### O handshake de aprovação

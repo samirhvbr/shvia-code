@@ -7,6 +7,7 @@
 //!   O `anna` NÃO executa nem aprova nada aqui — é cérebro, não mãos.
 
 use crate::frontend::Frontend;
+use crate::interrupcao;
 use crate::tools;
 use crate::types::{ToolCall, ToolDef};
 use std::path::Path;
@@ -37,11 +38,18 @@ pub struct HostRunner;
 impl ToolRunner for HostRunner {
     fn run(&mut self, call: &ToolCall, _root: &Path, _fe: &mut dyn Frontend) -> String {
         // Espera o resultado do host PRA ESTE tool_call (casando por id quando há).
+        // A `cancel` while waiting stops the turn; what the host does with its command is its
+        // own policy (0.14.0).
         loop {
-            let mut line = String::new();
-            if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
-                return "ERRO: host fechou o stdin sem devolver o resultado.".into();
-            }
+            let line = match interrupcao::linha_do_host_no_turno() {
+                interrupcao::Linha::Texto(l) => l,
+                interrupcao::Linha::Fim => return "ERRO: host fechou o stdin sem devolver o resultado.".into(),
+                interrupcao::Linha::Interrompido => {
+                    return "RECUSADO: o usuário interrompeu o turno antes de o host devolver o resultado \
+                            deste comando."
+                        .into()
+                }
+            };
             let t = line.trim();
             if t.is_empty() {
                 continue;

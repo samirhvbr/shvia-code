@@ -13,6 +13,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -92,6 +93,9 @@ pub enum Reply {
     Sse(Vec<Value>),
     /// A response before any stream: status, extra headers, JSON body.
     Status { code: u16, headers: Vec<(&'static str, String)>, body: Value },
+    /// Opens the stream, sends these events, tells `sent`, then keeps the connection open
+    /// until the client closes it: a model still answering when the person stops the turn.
+    Hang { events: Vec<Value>, sent: Sender<()> },
 }
 
 /// A final answer with no tool calls.
@@ -119,6 +123,17 @@ pub fn gateway(replies: Vec<Reply>) -> (String, thread::JoinHandle<Vec<Value>>) 
                         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         body.len(), body
                     ).unwrap();
+                }
+                Reply::Hang { events, sent } => {
+                    let body: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+                    write!(stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
+                    ).unwrap();
+                    stream.flush().unwrap();
+                    sent.send(()).unwrap();
+                    // Until the client hangs up (read returns 0) or the fixture times out.
+                    let mut sink = [0u8; 256];
+                    while matches!(stream.read(&mut sink), Ok(n) if n > 0) {}
                 }
                 Reply::Status { code, headers, body } => {
                     let body = body.to_string();
@@ -174,4 +189,54 @@ fn read_request(stream: &mut TcpStream) -> Value {
     let mut body = vec![0; length.expect("JSON request content length")];
     reader.read_exact(&mut body).unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+/// A running `anna --json` whose NDJSON events are read as they come, so a test can answer a
+/// gate or send `cancel` in the middle of a turn.
+pub struct Live {
+    child: Child,
+    stdin: std::process::ChildStdin,
+    events: Receiver<Value>,
+    pub seen: Vec<Value>,
+}
+
+impl Live {
+    pub fn start(home: &Home, url: &str) -> Self {
+        let mut child = home.spawn(url, &["--json"]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, events) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx.send(serde_json::from_str(&line).unwrap()).is_err() {
+                    return;
+                }
+            }
+        });
+        Self { child, stdin, events, seen: Vec::new() }
+    }
+
+    pub fn send(&mut self, v: Value) {
+        writeln!(self.stdin, "{v}").unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    /// The next event matching `pred` (every event read is kept in `seen`).
+    pub fn wait_for(&mut self, pred: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let ev = self.events.recv_timeout(left).unwrap_or_else(|_| panic!("event not seen; got {:?}", self.seen));
+            self.seen.push(ev.clone());
+            if pred(&ev) {
+                return ev;
+            }
+        }
+    }
+
+    pub fn finish(mut self) -> Output {
+        self.send(json!({"type": "exit"}));
+        drop(self.stdin);
+        wait_success(self.child)
+    }
 }

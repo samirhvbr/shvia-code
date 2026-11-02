@@ -3,6 +3,7 @@
 //! `on_event`, p/ a UI renderizar ao vivo) e devolve o agregado da volta.
 
 use crate::config::Config;
+use crate::interrupcao;
 use crate::types::{ChatRequest, Event, Message, RawEvent, ToolCall, ToolDef, Usage};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
@@ -41,6 +42,9 @@ pub struct TurnResult {
     pub retentavel: bool,
     /// The gateway's `Retry-After`, in seconds (Laravel's throttle sends it with every 429).
     pub retry_after: Option<Duration>,
+    /// The person stopped the turn while the request was being sent or streamed (0.14.0).
+    /// `text` holds what was already shown; tool calls of a cut-off answer are dropped.
+    pub interrompido: bool,
 }
 
 /// How long to wait before retrying a failed round, or `None` when it must not be retried.
@@ -104,13 +108,16 @@ pub async fn code_chat(
         profile_name: cfg.profile.clone(),
         effort: cfg.effort.clone(),
     };
-    let enviado = http_client()
+    let envio = http_client()
         .post(format!("{}/api/v1/code/chat", cfg.url.trim_end_matches('/')))
         .header("Accept", "text/event-stream")
         .header("X-API-Key", api_key)
         .json(&body)
-        .send()
-        .await;
+        .send();
+    let enviado = tokio::select! {
+        r = envio => r,
+        _ = interrupcao::esperar() => return Ok(TurnResult { interrompido: true, ..Default::default() }),
+    };
     let resp = match enviado {
         Ok(resp) => resp,
         // Only a connection that was never established is retried: the request did not reach
@@ -155,7 +162,18 @@ pub async fn code_chat(
     let mut result = TurnResult::default();
     let mut buf: Vec<u8> = Vec::new();
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        // Dropping the stream on a stop closes the connection; the gateway sees the client
+        // leave, as it does when a browser tab closes.
+        let chunk = tokio::select! {
+            c = stream.next() => c,
+            _ = interrupcao::esperar() => {
+                result.interrompido = true;
+                result.tool_calls.clear();
+                return Ok(result);
+            }
+        };
+        let Some(chunk) = chunk else { break };
         buf.extend_from_slice(&chunk?);
         while let Some(pos) = find(&buf, b"\n\n") {
             let frame: Vec<u8> = buf.drain(..pos + 2).collect();

@@ -38,4 +38,9 @@ pub trait Frontend {
     /// `--json -p` terminam o processo SEM persistir nada — o único conselho
     /// possível é rodar de novo com teto maior.
     fn aviso_teto(&mut self, teto: usize);
+    /// The person stopped the turn (Ctrl-C or the host's `cancel`); `turn_end` follows. What
+    /// already ran stays done and in the history (0.14.0).
+    fn turno_interrompido(&mut self) {
+        self.warn("turno interrompido — o que já rodou ficou feito; mande a próxima mensagem para seguir.");
+    }
 }

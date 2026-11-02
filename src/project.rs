@@ -128,7 +128,8 @@ impl Project {
              ESCOLHA da ferramenta de escrita: para CRIAR um arquivo novo ou reescrevê-lo por inteiro, \
              use write_file (com o conteúdo completo). Use edit_file APENAS para trocar um trecho EXATO \
              de um arquivo que JÁ EXISTE (old_string tem que casar com o texto atual; old_string vazio \
-             é recusado). edit_file NÃO cria arquivo.\n\n\
+             é recusado). edit_file NÃO cria arquivo. Para reescrever por inteiro um arquivo que JÁ existe, \
+             leia-o inteiro antes (read_file): sem isso, ou se ele mudou desde a leitura, a escrita é recusada.\n\n\
              Criar ou alterar arquivo é SÓ chamando a ferramenta edit_file/write_file — é ela que \
              mostra o diff e pede a aprovação do dev. NUNCA cole o conteúdo do arquivo no chat pedindo \
              \"posso criar/escrever?\": texto no chat não cria nada. Quando o dev pedir para criar, \

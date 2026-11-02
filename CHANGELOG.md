@@ -3,6 +3,35 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.3 - Tell a model that repeats the same call with the same result at three laps, and stop the turn at five
+
+The only guard against a model going round in circles was the round ceiling: late (100 rounds)
+and blind (it counts rounds, not repeats). On 31/10/2026 the owner's MiniMax session reached it
+after reading the same three worktrees' `git diff` twice each, at 4.47M tokens, and nothing ever
+told the model it was repeating itself. The gateway has a guard of its own (`ToolLoopGuard`), but
+it only sees what is left of the history after the client's compaction.
+
+- **`src/estagnacao.rs`** records every executed call: name, arguments and result. The same call
+  with the same result in a row, or the same cycle of up to four such calls (A, B, A, B…), counts
+  laps; a different result is progress and starts over (a file was edited, a test now fails
+  differently).
+- **At 3 laps the model is told**, once per repeat, in a note appended to that tool's result —
+  the newest message, so the cached prefix is untouched, and right next to the output it keeps
+  asking for. The person sees a warning.
+- **At 5 laps the turn stops.** The interactive terminal asks whether to let it go on (yes resets
+  the count); a host and `-p` are never asked, for the reason the ceiling never asks a host, and
+  the turn ends with the 0.15.2 closing request, worded for the stall: what was tried, why it did
+  not advance, what the person must provide.
+- Hermes does the same (`tool_guardrails.py`: notice at 3, cycles up to period 4, a hard stop
+  where nobody is watching; comparison of 02/11/2026).
+
+Tests: `repeticao_sem_progresso_avisa_no_terceiro_e_para_no_quinto` (unit: streak, progress
+resets, an A,B cycle) and, against the scripted gateway,
+`the_same_call_with_the_same_result_is_told_at_three_and_stopped_at_five` (five identical reads:
+the note reaches the model on the 3rd result, the 5th ends the turn with the closing request).
+Reversals, each red: the guard off, cycles off. Docs: `docs/USER-GUIDE.md`, `docs/embedding.md`,
+`docs/arquitetura-cli.md` §2 and §4, `SECURITY_GUIDELINES.md` §2.
+
 ## 0.15.2 - End a turn that hits the round ceiling with the model's own summary of done, left and next
 
 At the ceiling (`max_voltas`, 100) with nobody granting another batch — an NDJSON host, `-p`, or

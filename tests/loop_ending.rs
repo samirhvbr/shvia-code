@@ -46,3 +46,31 @@ fn the_ceiling_ends_the_turn_with_a_summary_that_stays_and_a_request_that_does_n
     assert_eq!(msgs[n - 2], json!({"role": "assistant", "content": "Done: read a.txt and b.txt. Left: c.txt."}));
     assert_eq!(msgs[n - 1], json!({"role": "user", "content": "continua"}));
 }
+
+#[test]
+fn the_same_call_with_the_same_result_is_told_at_three_and_stopped_at_five() {
+    let home = Home::new();
+    std::fs::write(home.0.join("a.txt"), "alpha").unwrap();
+    // The model reads the same unchanged file round after round, then answers the closing request.
+    let mut replies: Vec<_> = (1..=5).map(|i| tools(vec![tool_call(&format!("s{i}"), "read_file", json!({"path": "a.txt"}))])).collect();
+    replies.push(text("I kept reading a.txt; I need to know what to change in it."));
+    let (url, server) = gateway(replies);
+    let mut live = Live::start(&home, &url);
+    live.send(json!({"type": "user", "text": "fix a.txt"}));
+    live.wait_for(|e| e["type"] == "turn_done");
+    let seen = live.seen.clone();
+    live.finish();
+    let requests = server.join().unwrap();
+
+    // Five rounds and the closing request: the 100-round ceiling never came into it.
+    assert_eq!(requests.len(), 6);
+    // The 3rd identical result reached the model with the note, next to the output it repeated.
+    let terceira = last(&requests[3]);
+    assert_eq!(terceira["tool_call_id"], "s3");
+    assert!(terceira["content"].as_str().unwrap().contains("[aviso do anna: read_file com os mesmos argumentos"), "{terceira}");
+    assert!(!last(&requests[2])["content"].as_str().unwrap().contains("aviso do anna"), "not before the 3rd");
+    // The 5th stopped the turn: a host is never asked, the closing request names the repeat.
+    assert!(last(&requests[5])["content"].as_str().unwrap().contains("você repetiu read_file"), "{}", last(&requests[5]));
+    assert!(seen.iter().any(|e| e["type"] == "warn" && e["message"].as_str().unwrap().starts_with("turno parado")));
+    assert!(seen.iter().any(|e| e["type"] == "text" && e["delta"] == "I kept reading a.txt; I need to know what to change in it."));
+}

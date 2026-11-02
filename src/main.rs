@@ -11,6 +11,7 @@ mod api;
 mod checkpoint;
 mod config;
 mod diff;
+mod estagnacao;
 mod frontend;
 mod gate;
 mod guard;

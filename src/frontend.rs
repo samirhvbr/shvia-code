@@ -38,6 +38,14 @@ pub trait Frontend {
     /// `--json -p` terminam o processo SEM persistir nada — o único conselho
     /// possível é rodar de novo com teto maior.
     fn aviso_teto(&mut self, teto: usize);
+    /// The model repeated the same call with the same result `estagnacao::PARADA` times (0.15.3):
+    /// does the turn go on? Only the interactive terminal asks; a host and `-p` stop, for the
+    /// reason the ceiling never asks a host (its Auto mode would answer for nobody). Stopping ends
+    /// the turn with the closing summary.
+    fn continuar_apos_estagnacao(&mut self, o_que: &str) -> bool {
+        let _ = o_que;
+        false
+    }
     /// The person stopped the turn (Ctrl-C or the host's `cancel`); `turn_end` follows. What
     /// already ran stays done and in the history (0.14.0).
     fn turno_interrompido(&mut self) {

@@ -6,6 +6,7 @@
 
 use crate::api;
 use crate::config::Config;
+use crate::estagnacao::{Estagnacao, Veredito};
 use crate::frontend::Frontend;
 use crate::interrupcao;
 use crate::memory;
@@ -512,6 +513,8 @@ pub async fn run_turn(
     let lote = cfg.max_voltas.max(1);
     let mut teto = lote;
     let mut volta = 0usize;
+    // The same call with the same result, again and again (0.15.3): told at 3, stopped at 5.
+    let mut estagnacao = Estagnacao::default();
     while volta < teto || fe.continuar_apos_teto(teto) {
         if volta >= teto {
             teto += lote;
@@ -611,13 +614,23 @@ pub async fn run_turn(
         // Modelo pediu ferramentas → o `runner` decide onde executam (local =
         // o anna; host = a casca externa) e devolve o resultado (role=tool).
         // After a stop, the calls not yet run are answered without running.
+        let mut parada = None;
         for call in &result.tool_calls {
             let out = if interrupcao::pedido() {
                 fe.tool_result(call, NAO_EXECUTADA);
                 NAO_EXECUTADA.to_string()
             } else {
-                let out = runner.run(call, &project.root, fe);
+                let mut out = runner.run(call, &project.root, fe);
                 memory::tool_use(&call.name, &call.arguments, &out);
+                match estagnacao.registrar(&call.name, &call.arguments, &out) {
+                    Veredito::Segue => {}
+                    // To the model, next to the output it keeps asking for; and said to the person.
+                    Veredito::Avisar(nota) => {
+                        fe.warn(&format!("o modelo está se repetindo — {}", nota.trim()));
+                        out.push_str(&nota);
+                    }
+                    Veredito::Parar(o_que) => parada = Some(o_que),
+                }
                 out
             };
             messages.push(Message::tool(call.id.clone(), out));
@@ -627,6 +640,24 @@ pub async fn run_turn(
             fe.turno_interrompido();
             fe.turn_end(telemetry);
             return Ok(String::new());
+        }
+        if let Some(o_que) = parada {
+            if fe.continuar_apos_estagnacao(&o_que) {
+                estagnacao.zerar();
+            } else {
+                fe.warn(&format!("turno parado: o modelo repetiu {o_que}."));
+                let pedido = format!(
+                    "{ANNA} Este turno vai parar aqui: você repetiu {o_que}. NÃO chame ferramentas nesta \
+                     resposta (se chamar, ela não roda). Em poucas linhas, para o dev: o que você tentou, por \
+                     que não avançou e o que precisa dele para seguir."
+                );
+                let resumo = volta_de_fechamento(cfg, messages, runner.tool_defs(), fe, telemetry, pedido).await;
+                if interrupcao::pedido() {
+                    fe.turno_interrompido();
+                }
+                fe.turn_end(telemetry);
+                return Ok(if resumo.is_empty() { ultimo_texto } else { resumo });
+            }
         }
     }
 

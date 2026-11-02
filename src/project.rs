@@ -10,28 +10,89 @@
 
 use std::path::{Path, PathBuf};
 
+/// Instruction files, in the order one folder's file is chosen (0.15.5: per folder, from the root
+/// down to where `anna` runs). ANNA.md comes first because it is the short context written for
+/// this agent; CLAUDE.md and AGENTS.md are the fleet's full rule books.
+const NOMES: [&str; 3] = ["ANNA.md", "CLAUDE.md", "AGENTS.md"];
+/// Characters of one file in the prompt, and of all of them. The block is resent on every round
+/// of every turn, so it is a cost per request, not per session: a fleet CLAUDE.md runs to tens of
+/// thousands of characters. What does not fit is announced, never dropped in silence.
+const TETO_POR_ARQUIVO: usize = 6000;
+const TETO_TOTAL: usize = 9000;
+
+/// One instruction file that enters the prompt.
+pub struct Instrucao {
+    /// Path from the project root (`CLAUDE.md`, `app/AGENTS.md`).
+    pub rel: String,
+    pub conteudo: String,
+}
+
 pub struct Project {
     pub root: PathBuf,
     pub name: String,
     pub git_branch: Option<String>,
-    pub context: Option<String>,
+    /// The chosen file of each folder from the root down to the working folder.
+    pub instrucoes: Vec<Instrucao>,
+    /// Instruction files found along the way and not loaded, with their size: listed in the
+    /// prompt so the model can read them when it needs to.
+    pub outras: Vec<(String, usize)>,
+}
+
+/// The text of an instruction file below its first H1: this fleet keeps CLAUDE.md and AGENTS.md
+/// "mirrored below the H1", and the same rules twice would double the cost for nothing.
+fn corpo(texto: &str) -> &str {
+    let t = texto.trim_start();
+    match t.split_once('\n') {
+        Some((primeira, resto)) if primeira.starts_with("# ") => resto.trim(),
+        _ => t.trim(),
+    }
 }
 
 impl Project {
     pub fn detect() -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let root = git_root(&cwd).unwrap_or(cwd);
+        Self::detectar_em(&cwd)
+    }
+
+    pub fn detectar_em(cwd: &Path) -> Self {
+        let root = git_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
         let name = root
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "projeto".into());
         let git_branch = current_branch(&root);
-        let context = ["ANNA.md", "CLAUDE.md", "AGENTS.md"]
-            .iter()
-            .map(|f| root.join(f))
-            .find(|p| p.exists())
-            .and_then(|p| std::fs::read_to_string(p).ok());
-        Self { root, name, git_branch, context }
+
+        // The root, then every folder down to the working one (when `anna` runs in a subfolder,
+        // its own rules are the most specific ones). Until 0.15.5 only the root's file was read.
+        let mut pastas = vec![root.clone()];
+        if let Ok(abaixo) = cwd.strip_prefix(&root) {
+            let mut atual = root.clone();
+            for parte in abaixo.components() {
+                atual.push(parte);
+                pastas.push(atual.clone());
+            }
+        }
+
+        let mut instrucoes: Vec<Instrucao> = Vec::new();
+        let mut outras = Vec::new();
+        for pasta in &pastas {
+            let mut escolhido = false;
+            for nome in NOMES {
+                let caminho = pasta.join(nome);
+                let Ok(texto) = std::fs::read_to_string(&caminho) else { continue };
+                let rel = caminho.strip_prefix(&root).unwrap_or(&caminho).to_string_lossy().replace('\\', "/");
+                if instrucoes.iter().any(|i| corpo(&i.conteudo) == corpo(&texto)) {
+                    continue; // a mirror of a file already in
+                }
+                if escolhido {
+                    outras.push((rel, texto.chars().count()));
+                } else {
+                    instrucoes.push(Instrucao { rel, conteudo: texto });
+                    escolhido = true;
+                }
+            }
+        }
+        Self { root, name, git_branch, instrucoes, outras }
     }
 
     pub fn system_prompt(&self, host_mode: bool) -> String {
@@ -81,12 +142,41 @@ impl Project {
     /// Separado do system prompt do agente porque os papéis do orquestrador
     /// (arquiteto/executor/revisor) montam prompts próprios e precisam do mesmo
     /// contexto — duplicar a regra era garantir que uma das duas envelhecesse.
+    ///
+    /// A cut file says so, with its size, and the files left out are listed (0.15.5): until then
+    /// the 6,000-character cut was silent, and a model followed the first half of a rule book
+    /// believing it had all of it.
     pub fn bloco_contexto(&self) -> String {
         let mut s = format!("Projeto: {} (raiz: {}).", self.name, self.root.display());
-        if let Some(ctx) = &self.context {
-            let trimmed: String = ctx.chars().take(6000).collect();
-            s.push_str("\n\nInstruções do projeto (arquivo de contexto):\n");
-            s.push_str(&trimmed);
+        let mut restante = TETO_TOTAL;
+        let mut fora: Vec<(String, usize)> = Vec::new();
+        for (n, i) in self.instrucoes.iter().enumerate() {
+            let total = i.conteudo.chars().count();
+            let cabe = total.min(TETO_POR_ARQUIVO).min(restante);
+            if cabe == 0 {
+                fora.push((i.rel.clone(), total));
+                continue;
+            }
+            if n == 0 {
+                s.push_str("\n\nInstruções do projeto (arquivos de contexto):");
+            }
+            s.push_str(&format!("\n\n--- {} ---\n", i.rel));
+            s.extend(i.conteudo.chars().take(cabe));
+            if cabe < total {
+                s.push_str(&format!(
+                    "\n[… {} tem {total} caracteres; aqui estão os primeiros {cabe}. O resto: read_file {}.]",
+                    i.rel, i.rel
+                ));
+            }
+            restante -= cabe;
+        }
+        fora.extend(self.outras.iter().cloned());
+        if !fora.is_empty() {
+            let lista: Vec<String> = fora.iter().map(|(rel, n)| format!("{rel} ({n} caracteres)")).collect();
+            s.push_str(&format!(
+                "\n\nOutros arquivos de instrução neste projeto, não carregados: {}. Leia com read_file se precisar.",
+                lista.join(", ")
+            ));
         }
         s
     }
@@ -106,4 +196,53 @@ fn git_root(start: &Path) -> Option<PathBuf> {
 fn current_branch(root: &Path) -> Option<String> {
     let head = std::fs::read_to_string(root.join(".git/HEAD")).ok()?;
     head.strip_prefix("ref: refs/heads/").map(|b| b.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn projeto(arquivos: &[(&str, String)]) -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let raiz = std::env::temp_dir().join(format!("anna-projeto-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let _ = std::fs::remove_dir_all(&raiz);
+        std::fs::create_dir_all(raiz.join(".git")).unwrap();
+        for (rel, texto) in arquivos {
+            let p = raiz.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, texto).unwrap();
+        }
+        raiz
+    }
+
+    #[test]
+    fn instrucoes_da_raiz_ao_diretorio_de_trabalho_sem_espelho_e_sem_corte_mudo() {
+        let regras = "x".repeat(7000);
+        let raiz = projeto(&[
+            ("CLAUDE.md", format!("# Para o Claude Code\n{regras}")),
+            // The fleet's mirror: same body under another H1. Loaded once, not listed.
+            ("AGENTS.md", format!("# Para agentes\n{regras}")),
+            ("app/AGENTS.md", "# app\nUse pnpm aqui.".into()),
+            ("app/CLAUDE.md", "# outro\nregras diferentes".into()),
+        ]);
+        let p = Project::detectar_em(&raiz.join("app"));
+        let rels: Vec<&str> = p.instrucoes.iter().map(|i| i.rel.as_str()).collect();
+        assert_eq!(rels, ["CLAUDE.md", "app/CLAUDE.md"], "one file per folder, root first");
+        let bloco = p.bloco_contexto();
+        assert!(bloco.contains("--- CLAUDE.md ---") && bloco.contains("--- app/CLAUDE.md ---"), "{bloco}");
+        let total = format!("# Para o Claude Code\n{regras}").chars().count();
+        assert!(bloco.contains(&format!("CLAUDE.md tem {total} caracteres; aqui estão os primeiros 6000")), "the cut is said: {bloco}");
+        assert!(bloco.contains("app/AGENTS.md (20 caracteres)"), "a different file in the chain is listed: {bloco}");
+        assert!(!bloco.contains("AGENTS.md (7015"), "a mirror is neither loaded nor listed: {bloco}");
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn na_raiz_com_um_arquivo_curto_o_bloco_e_o_de_sempre() {
+        let raiz = projeto(&[("ANNA.md", "# ANNA\ncurto".into())]);
+        let bloco = Project::detectar_em(&raiz).bloco_contexto();
+        assert!(bloco.ends_with("--- ANNA.md ---\n# ANNA\ncurto"), "no notice, no list: {bloco}");
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
 }

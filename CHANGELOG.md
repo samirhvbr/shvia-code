@@ -3,6 +3,30 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.5 - Load the instruction file of every folder down to the working one, and say when one is cut
+
+The project prompt took the first of ANNA.md, CLAUDE.md and AGENTS.md at the repository root,
+cut to 6,000 characters without a word. A model running in `app/` never saw `app/AGENTS.md`, a
+second file at the root was invisible, and a rule book cut in the middle read as complete.
+
+- **One file per folder, from the root down to the folder `anna` runs in**, chosen in the same
+  order (ANNA.md, CLAUDE.md, AGENTS.md): the deeper ones are the more specific rules.
+- **The cut is said:** `[… CLAUDE.md tem N caracteres; aqui estão os primeiros 6000. O resto:
+  read_file CLAUDE.md.]`. Up to 6,000 characters per file and 9,000 in all, because the block is
+  resent on every round of every turn: it is a cost per request. A file left out by the total is
+  listed instead.
+- **A mirror is loaded once:** this fleet keeps CLAUDE.md and AGENTS.md "mirrored below the H1",
+  and the same rules twice would double the cost for nothing. Files compare below their first H1.
+- **The other instruction files found are listed** by name and size, not loaded, so the model
+  knows they exist and can read them.
+- Running at the root with one short file, the block is what it was.
+
+Hermes and claw-code both walk the folder chain (comparison of 02/11/2026); claw-code caps 4,000
+per file and 12,000 in all. Tests: `instrucoes_da_raiz_ao_diretorio_de_trabalho_sem_espelho_e_sem_corte_mudo`
+and `na_raiz_com_um_arquivo_curto_o_bloco_e_o_de_sempre`. Reversals, each red: no chain, no cut
+notice, no mirror check. `Project::detectar_em` takes the working folder, so the detection is
+testable without changing the process directory. Docs: `docs/USER-GUIDE.md`.
+
 ## 0.15.4 - Ask every time before writing an instruction file, session approval or not
 
 `ANNA.md`, `AGENTS.md` and `CLAUDE.md` are loaded into the prompt of every later session — by

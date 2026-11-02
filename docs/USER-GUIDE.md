@@ -109,6 +109,13 @@ is killed with its whole process tree, and tool calls not yet run are answered a
 Then the prompt comes back with the session intact. A second Ctrl-C in the same turn ends
 `anna` (exit 130), the way out of anything that does not stop.
 
+**A model that repeats itself is told, then stopped** (0.15.3+). When the same tool call, with
+the same arguments, returns the same result three times in a row (or the same cycle of up to four
+calls repeats three times), a note goes to the model with that result and a warning to you. At
+five, the REPL asks *"O modelo repetiu … — deixar continuar?"*: yes resets the count, no ends
+the turn with the model's summary of what it tried. A different result counts as progress.
+At the round ceiling the turn also ends with such a summary (0.15.2+).
+
 Writes show a numbered diff. Approvals use arrow keys/Enter, numbers, or letter
 shortcuts; Esc and Ctrl-C refuse. Destructive commands default to refusal and cannot
 receive session approval. `t` applies to a tool scope, such as `write_file` or `bash`,

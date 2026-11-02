@@ -59,7 +59,16 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 `always` (destrutivo — `always` não vale, só `approve`/`reject`).
 
 **Teto de voltas** (SECURITY §2.7): no host o motor NUNCA pergunta se continua —
-estourou, emite `warn` + `turn_done`. No modo persistente a sessão segue viva no
+estourou, emite `warn` + `turn_done`. Since 0.15.2 a closing request comes first: its answer
+streams as ordinary `text` events (what was done, what is left, the next step), so the turn's
+last text is a summary instead of the empty text of a round that had asked for tools; a tool
+call in that answer is neither run nor emitted.
+
+**Stall guard** (0.15.3+): the same tool call with the same arguments and the same result three
+times in a row (or a cycle of up to four calls repeated three times) adds a note to that
+`tool_result`'s content for the model and emits a `warn` (*"o modelo está se repetindo — …"*). At
+five the engine never asks a host either: it emits `warn` (*"turno parado: …"*), the same closing
+request as the ceiling, then `turn_done`. No modo persistente a sessão segue viva no
 processo: a casca pode oferecer um botão "continuar" que só reenvia
 `{"type":"user","text":"continua"}` (campo `text`, como na tabela acima). Em
 `--json -p` o processo termina sem persistir nada — o aviso já manda rodar de

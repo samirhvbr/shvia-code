@@ -3,6 +3,62 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.3 - Tell a model that repeats the same call with the same result at three laps, and stop the turn at five
+
+The only guard against a model going round in circles was the round ceiling: late (100 rounds)
+and blind (it counts rounds, not repeats). On 31/10/2026 the owner's MiniMax session reached it
+after reading the same three worktrees' `git diff` twice each, at 4.47M tokens, and nothing ever
+told the model it was repeating itself. The gateway has a guard of its own (`ToolLoopGuard`), but
+it only sees what is left of the history after the client's compaction.
+
+- **`src/estagnacao.rs`** records every executed call: name, arguments and result. The same call
+  with the same result in a row, or the same cycle of up to four such calls (A, B, A, B…), counts
+  laps; a different result is progress and starts over (a file was edited, a test now fails
+  differently).
+- **At 3 laps the model is told**, once per repeat, in a note appended to that tool's result —
+  the newest message, so the cached prefix is untouched, and right next to the output it keeps
+  asking for. The person sees a warning.
+- **At 5 laps the turn stops.** The interactive terminal asks whether to let it go on (yes resets
+  the count); a host and `-p` are never asked, for the reason the ceiling never asks a host, and
+  the turn ends with the 0.15.2 closing request, worded for the stall: what was tried, why it did
+  not advance, what the person must provide.
+- Hermes does the same (`tool_guardrails.py`: notice at 3, cycles up to period 4, a hard stop
+  where nobody is watching; comparison of 02/11/2026).
+
+Tests: `repeticao_sem_progresso_avisa_no_terceiro_e_para_no_quinto` (unit: streak, progress
+resets, an A,B cycle) and, against the scripted gateway,
+`the_same_call_with_the_same_result_is_told_at_three_and_stopped_at_five` (five identical reads:
+the note reaches the model on the 3rd result, the 5th ends the turn with the closing request).
+Reversals, each red: the guard off, cycles off. Docs: `docs/USER-GUIDE.md`, `docs/embedding.md`,
+`docs/arquitetura-cli.md` §2 and §4, `SECURITY_GUIDELINES.md` §2.
+
+## 0.15.2 - End a turn that hits the round ceiling with the model's own summary of done, left and next
+
+At the ceiling (`max_voltas`, 100) with nobody granting another batch — an NDJSON host, `-p`, or
+the person answering "no" — the turn ended with whatever the last round said, which is usually
+nothing: that round had asked for tools. The person, or the Run, then had to say "continua"
+without knowing where the work stood. Hermes ends its iteration cap the same way this does
+(`handle_max_iterations`, comparison of 02/11/2026).
+
+- **One more request** asks, in a `user` message, for what was done, what is left and the next
+  step, without tools. Its answer streams like any other (`text` events for a host) and becomes
+  the turn's final text, so the Run and the planning pipeline get a summary instead of an empty
+  string.
+- **The same tools go with it.** Dropping them or forcing `tool_choice: none` changes the prompt
+  the provider renders and throws away the cached prefix (Hermes keeps them for that reason, and
+  the gateway's Ollama driver ignores `tool_choice` anyway). A tool call in the answer is neither
+  run nor shown.
+- **The asking message does not stay in the history.** Compaction keeps the latest `user`
+  message as the person's request, and this one is not theirs. The summary stays, as the
+  assistant's last word, so the next turn resumes from it.
+- A failure of that request only costs the summary (a warning says so); a stop during it ends
+  the turn as interrupted.
+
+Test: `the_ceiling_ends_the_turn_with_a_summary_that_stays_and_a_request_that_does_not`
+(`SHVIA_MAX_VOLTAS=2`, against the scripted gateway; red with the closing request removed).
+`tests/common` gained `spawn_env`/`start_env` and the shared `tool_call`/`tools` helpers. Docs:
+`docs/protocolo.md` §4, `docs/embedding.md`, `docs/arquitetura-cli.md` §4, `SECURITY_GUIDELINES.md` §2.
+
 ## 0.15.1 - Prune old and stale tool outputs to one-line stubs before dropping any message
 
 0.15.0 made the window a budget, but the only way to fit it was still to drop whole messages,

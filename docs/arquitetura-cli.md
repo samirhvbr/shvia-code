@@ -50,6 +50,7 @@ src/
   view.rs        Pure welcome, action, result-summary and footer formatting.
   render.rs      Streaming Markdown state, tables/lists and line-based code highlighting.
   diff.rs        Terminal numbered/color diff and plain unified host preview.
+  estagnacao.rs  Stall guard: same call, arguments and result (or cycle) told at 3 laps, stopped at 5.
   telemetry.rs   Token/cost accumulation from gateway usage.
   stats.rs       Pure session aggregation, dates, ranges, models and heatmap data.
   stats_term.rs  Terminal statistics rendering.
@@ -106,7 +107,13 @@ There is no eventsource-stream, ratatui or thiserror dependency. SSE framing is 
    tool call not yet run gets a `RECUSADO` result. The REPL saves the session after every
    round that ran tools (`run_turn`'s `ao_fim_da_volta`) and after the turn.
 7. At `max_voltas` (100 by default), the interactive terminal may grant another batch;
-   JSON hosts end the turn with a warning and can submit a subsequent user turn.
+   JSON hosts end the turn with a warning and can submit a subsequent user turn. Since
+   0.15.2, when no batch is granted, one closing request (same tools, a tool call in the
+   answer is not run) asks the model for what was done, what is left and the next step; the
+   summary stays in the history as the assistant's last word, the asking message does not.
+8. The stall guard (`estagnacao.rs`, 0.15.3+) records every executed call with its arguments
+   and result. Three laps of the same call or cycle (up to four calls) append a note to that
+   result; five stop the turn: the terminal asks, a host gets the closing request above.
 
 The runner decorator `SomenteLeitura` restricts architect/reviewer tools on both
 advertisement and execution. It offers filesystem/Git reads and `todo_write`, without

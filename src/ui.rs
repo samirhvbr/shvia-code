@@ -328,6 +328,13 @@ impl Frontend for Ui {
         }
     }
 
+    fn continuar_apos_estagnacao(&mut self, o_que: &str) -> bool {
+        if self.non_interactive {
+            return false;
+        }
+        gate::confirm(&format!("O modelo repetiu {o_que} — deixar continuar?"))
+    }
+
     fn continuar_apos_teto(&mut self, teto: usize) -> bool {
         if self.non_interactive {
             // -p/CI: ninguém para responder — encerra o turno (o warn orienta).

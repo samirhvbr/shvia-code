@@ -4,22 +4,11 @@
 
 mod common;
 
-use common::{events, gateway, text, wait_success, Home, Live, Reply};
+use common::{events, gateway, text, tool_call, tools, wait_success, Home, Live, Reply};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-
-fn tool_call(id: &str, name: &str, arguments: Value) -> Value {
-    json!({"id": id, "name": name, "arguments": arguments})
-}
-
-/// A round that asks for these tools.
-fn tools(calls: Vec<Value>) -> Reply {
-    let mut evs: Vec<Value> = calls.iter().map(|c| json!({"kind": "tool_call", "data": c})).collect();
-    evs.push(json!({"kind": "done", "data": {"text": "", "tool_calls": calls}}));
-    Reply::Sse(evs)
-}
 
 fn saved_session(home: &Home) -> Value {
     let dir = home.0.join(".shvia-code/sessions");

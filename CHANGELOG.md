@@ -3,6 +3,24 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.4 - Ask every time before writing an instruction file, session approval or not
+
+`ANNA.md`, `AGENTS.md` and `CLAUDE.md` are loaded into the prompt of every later session — by
+anna's context block, by Claude Code and by Codex. A write to one of them went through the
+ordinary confirmation, so once the person answered `t` ("all this session") for `write_file` or
+`edit_file`, a prompt injected through a file the model read could plant an instruction that
+outlives the session and reaches every agent that opens the project. Hermes requires a person for
+these writes in every mode (comparison of 02/11/2026).
+
+- `edit_file` and `write_file` use the **always** gate for `ANNA.md`, `AGENTS.md`, `CLAUDE.md` and
+  `CLAUDE.local.md` (any folder, any case), checked on the requested name and on the real target
+  after links: a link named `CLAUDE.md` writes what CLAUDE.md shows.
+- `t` does not cover them, and an NDJSON host answering `always` is a refusal there, as for
+  destructive shell commands. Other files keep the ordinary confirmation.
+
+Test: `escrever_arquivo_de_instrucao_pergunta_sempre` (red with the rule off). Docs:
+`docs/ferramentas.md`, `SECURITY_GUIDELINES.md` §2.
+
 ## 0.15.3 - Tell a model that repeats the same call with the same result at three laps, and stop the turn at five
 
 The only guard against a model going round in circles was the round ceiling: late (100 rounds)

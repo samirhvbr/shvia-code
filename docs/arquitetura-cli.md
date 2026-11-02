@@ -81,6 +81,10 @@ There is no eventsource-stream, ratatui or thiserror dependency. SSE framing is 
    initial system context and the session's first and latest requests, and avoiding
    orphan tool results.
 3. Call `/api/v1/code/chat` with the current profile/effort and runner's tool definitions.
+   A failure before the stream opens that clears by itself (429/408/502/503/504, or no
+   connection at all) is retried up to 4 times, waiting the gateway's `Retry-After` or a
+   2–30 s backoff, with a visible warning (0.13.10+). Errors inside an open stream, 4xx
+   and 500 are not retried.
 4. Stream frontend text/tool events, collect usage, and report gateway errors.
 5. Append the assistant response to the history once, including a final answer without
    tool calls (0.13.8+; an empty final answer is left out, since some providers reject an

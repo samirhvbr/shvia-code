@@ -3,6 +3,31 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.13.10 - Retry a gateway round that failed before the stream opened, honoring Retry-After
+
+The gateway throttles each key (`/code/chat`, 20 requests per minute by default) and every
+round of a turn is one request, while reads run without approval. A fast turn goes over the
+limit, and the 429 ended the turn with an error: the work stopped mid-way and the person had to
+say "continua". Hermes and claw-code both retry with backoff (comparison of 02/11/2026).
+
+- A round that fails **before the stream opens** with 429, 408, 502, 503 or 504, or that never
+  connected, is sent again up to 4 times. The wait is the gateway's `Retry-After` (Laravel's
+  throttle sends it with every 429); without it, 2, 4, 8, 16 s capped at 30 s, plus up to 20%
+  jitter. Each wait shows a `warn` (terminal and NDJSON) with the reason and the attempt.
+- A `Retry-After` above 120 s is reported instead of waited for.
+- **Not retried, on purpose:** 400/401/403/422 fail the same way again; a 500 is a gateway
+  defect; an SSE `error` comes after the gateway already ran its own failover; and a connection
+  that broke after the request was sent may have started a billed inference, which a retry
+  could pay for twice. Nothing the person has seen is ever repeated: a retry happens only when
+  no event reached the frontend.
+
+`tokio` gains its `time` feature for the wait (no new crate in the lockfile). Tests:
+`nova_tentativa_so_para_falha_que_passa_sozinha` (unit) and
+`a_rate_limited_round_is_retried_after_the_gateways_retry_after`, which runs the real binary
+against a scripted loopback gateway (`tests/common`, shared with the next process-level
+tests); with the retry disabled it fails with a single request. Docs: `docs/protocolo.md` §5,
+`docs/arquitetura-cli.md` §4.
+
 ## 0.13.9 - Apply the secrets denylist to grep and to the real target of every file tool
 
 An external review (26/10/2026) found three ways around the confinement and the secrets denylist

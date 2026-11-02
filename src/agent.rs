@@ -169,10 +169,28 @@ pub async fn run_turn(
                  (teto do gateway); seus pedidos ficaram e o modelo foi avisado do corte."
             ));
         }
-        fe.waiting();
-        let result =
-            api::code_chat(cfg, messages, runner.tool_defs(), &mut |ev| fe.on_event(ev)).await?;
-        fe.end_stream();
+        let mut tentativa = 0;
+        let result = loop {
+            fe.waiting();
+            let r = api::code_chat(cfg, messages, runner.tool_defs(), &mut |ev| fe.on_event(ev)).await?;
+            fe.end_stream();
+            // A failure before the stream opened (429 from the per-key throttle, the gateway
+            // briefly down) is waited out instead of ending the turn; nothing was shown or
+            // run, so repeating the request repeats nothing the person has seen.
+            match api::nova_tentativa(&r, tentativa) {
+                Some(espera) => {
+                    tentativa += 1;
+                    fe.warn(&format!(
+                        "nova tentativa em {} s ({tentativa} de {}) — {}",
+                        espera.as_secs() + u64::from(espera.subsec_nanos() > 0),
+                        api::MAX_TENTATIVAS,
+                        r.error.as_deref().unwrap_or("falha antes da resposta"),
+                    ));
+                    tokio::time::sleep(espera).await;
+                }
+                None => break r,
+            }
+        };
 
         if let Some(u) = &result.usage {
             telemetry.add(u);

@@ -153,6 +153,15 @@ gates de aprovação) são 100% do cliente. Ver `SECURITY_GUIDELINES.md` §3.
 O CLI deve tratar tanto o **JSON de erro pré-stream** (4xx antes do `text/event-stream`)
 quanto o **evento `error` no meio do stream**. Nunca ecoar a API key em log.
 
+**Retries (0.13.10+).** A round that fails before the stream opens with 429, 408, 502,
+503 or 504, or that never connected, is sent again up to 4 times: the CLI waits the
+`Retry-After` seconds when the gateway sends them (the per-key throttle does), otherwise a
+2, 4, 8, 16 s backoff (capped at 30 s) with jitter, and shows a `warn` each time. A
+`Retry-After` above 120 s ends the turn with the error instead. Not retried: 400/401/403/422,
+500 (a gateway defect), an SSE `error` event (the gateway already ran its own failover),
+and a connection that broke after the request was sent, which may already have started a
+billed inference.
+
 ## 6. Exemplo (uma volta com ferramenta)
 
 ```

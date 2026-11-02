@@ -86,22 +86,37 @@ pub struct ChatRequest<'a> {
 pub struct Usage {
     #[serde(default)]
     pub total_tokens: i64,
+    /// What the provider counted for the request just sent. Calibrates the estimate of the
+    /// next request's size against the target's window (0.15.0).
+    #[serde(default)]
+    pub prompt_tokens: Option<u64>,
     #[serde(default)]
     pub cost: Option<f64>,
     #[serde(default)]
     pub cost_estimated: Option<f64>,
 }
 
+/// What the gateway says about the target in the `model` event (0.15.0; absent from older
+/// gateways): `mensagens` = the per-request message ceiling it validates; `janela` = the
+/// model's effective context window in tokens, when the gateway knows it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Limites {
+    pub mensagens: Option<usize>,
+    pub janela: Option<u64>,
+}
+
 /// Evento do stream SSE, já tipado (docs/protocolo.md §3).
 #[derive(Debug, Clone)]
 pub enum Event {
-    Model { model: String, server_label: String },
+    Model { model: String, server_label: String, limites: Limites },
     TextDelta(String),
     /// "Pensando ao vivo" — o conteúdo é ignorado no C1 (render no C3).
     ReasoningDelta,
     ToolCall(ToolCall),
     Usage(Usage),
-    Error(String),
+    /// `codigo` classifies it (`provedor_recusou_pedido` = the provider refused the request
+    /// itself, as Ollama does for a prompt over `num_ctx`); `status` is the provider's HTTP code.
+    Error { message: String, codigo: Option<String> },
     Done { text: String, tool_calls: Vec<ToolCall> },
     Other,
 }
@@ -119,12 +134,22 @@ impl Event {
         let d = raw.data;
         let s = |k: &str| d.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
         match raw.kind.as_str() {
-            "model" => Event::Model { model: s("model"), server_label: s("server_label") },
+            "model" => Event::Model {
+                model: s("model"),
+                server_label: s("server_label"),
+                limites: Limites {
+                    mensagens: d.get("messages_max").and_then(|v| v.as_u64()).map(|v| v as usize),
+                    janela: d.get("context_window").and_then(|v| v.as_u64()),
+                },
+            },
             "text_delta" => Event::TextDelta(s("delta")),
             "reasoning_delta" => Event::ReasoningDelta,
             "tool_call" => serde_json::from_value::<ToolCall>(d).map(Event::ToolCall).unwrap_or(Event::Other),
             "usage" => Event::Usage(serde_json::from_value(d).unwrap_or_default()),
-            "error" => Event::Error(s("message")),
+            "error" => Event::Error {
+                message: s("message"),
+                codigo: d.get("codigo").and_then(|v| v.as_str()).map(str::to_string),
+            },
             "done" => {
                 let text = d.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                 let tool_calls = d

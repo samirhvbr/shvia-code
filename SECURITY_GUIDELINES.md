@@ -63,7 +63,9 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
    with process-tree termination; 0 disables it. It applies to the shell tool, not every
    subprocess (pipeline verification uses another path). File/search/output limits vary
    by tool and are not a global memory ceiling. HTTP streams and stdin approval/result
-   waits have no explicit overall application timeout.
+   waits have no explicit overall application timeout; since 0.14.0 the person can stop
+   them (terminal Ctrl-C, host `cancel`), which also kills a running shell command's
+   process tree, even with `bash_timeout = 0`.
 
 ## 3. Gateway and external-host boundary
 

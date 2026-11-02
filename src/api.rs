@@ -3,10 +3,21 @@
 //! `on_event`, p/ a UI renderizar ao vivo) e devolve o agregado da volta.
 
 use crate::config::Config;
+use crate::interrupcao;
 use crate::types::{ChatRequest, Event, Message, RawEvent, ToolCall, ToolDef, Usage};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+/// Retries after a failure that happened before the stream opened (see `nova_tentativa`).
+pub const MAX_TENTATIVAS: u32 = 4;
+/// A `Retry-After` longer than this is reported instead of waited for: a turn that sits
+/// silent for minutes looks hung, and the person can decide to come back later.
+const RETRY_AFTER_MAX: Duration = Duration::from_secs(120);
+/// Backoff without `Retry-After`: 2, 4, 8, 16 s (capped), plus up to 20% jitter.
+const BACKOFF_BASE: Duration = Duration::from_secs(2);
+const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 /// Client HTTP compartilhado do processo: reusa pool de conexões e sessão TLS
 /// entre voltas (antes: `Client::new()` a cada chamada = handshake TCP+TLS
@@ -25,6 +36,63 @@ pub struct TurnResult {
     pub error: Option<String>,
     pub model: Option<String>,
     pub server_label: Option<String>,
+    /// The failure happened before any event reached the frontend (HTTP status before the
+    /// stream, or no connection at all), and it is one that clears by itself: a retry repeats
+    /// nothing the person has seen. See `nova_tentativa`.
+    pub retentavel: bool,
+    /// The gateway's `Retry-After`, in seconds (Laravel's throttle sends it with every 429).
+    pub retry_after: Option<Duration>,
+    /// What the gateway said about the target (0.15.0); default when it said nothing.
+    pub limites: crate::types::Limites,
+    /// The SSE error's classification (`provedor_recusou_pedido`, …), when it came with one.
+    pub codigo: Option<String>,
+    /// The person stopped the turn while the request was being sent or streamed (0.14.0).
+    /// `text` holds what was already shown; tool calls of a cut-off answer are dropped.
+    pub interrompido: bool,
+}
+
+/// How long to wait before retrying a failed round, or `None` when it must not be retried.
+///
+/// Why this exists: the gateway throttles each key (`/code/chat`, 20 requests/minute by
+/// default) and every round of a turn is one request, while reads run without approval. A
+/// fast turn goes over the limit, and until 0.13.10 the 429 ended the turn with an error and
+/// the work stopped mid-way. `tentativa` counts retries already made (0 on the first failure).
+pub fn nova_tentativa(r: &TurnResult, tentativa: u32) -> Option<Duration> {
+    if !r.retentavel || tentativa >= MAX_TENTATIVAS {
+        return None;
+    }
+    match r.retry_after {
+        Some(espera) if espera > RETRY_AFTER_MAX => None,
+        Some(espera) => Some(espera),
+        None => {
+            let base = BACKOFF_BASE.saturating_mul(1 << tentativa.min(8)).min(BACKOFF_MAX);
+            // Jitter without a random-number crate: the clock's sub-second nanoseconds are
+            // enough to keep two processes from retrying in the same instant.
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            Some(base + base.mul_f64(0.2 * f64::from(nanos % 1000) / 1000.0))
+        }
+    }
+}
+
+/// Statuses that clear by themselves: rate limit, request timeout, and the gateway or its
+/// proxy being briefly unavailable (deploy, maintenance mode). A 500 is a gateway defect and
+/// a 4xx is a request that will fail the same way again, so neither is retried.
+fn status_retentavel(status: u16) -> bool {
+    matches!(status, 408 | 429 | 502 | 503 | 504)
+}
+
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
 }
 
 pub async fn code_chat(
@@ -44,16 +112,35 @@ pub async fn code_chat(
         profile_name: cfg.profile.clone(),
         effort: cfg.effort.clone(),
     };
-    let resp = http_client()
+    let envio = http_client()
         .post(format!("{}/api/v1/code/chat", cfg.url.trim_end_matches('/')))
         .header("Accept", "text/event-stream")
         .header("X-API-Key", api_key)
         .json(&body)
-        .send()
-        .await?;
+        .send();
+    let enviado = tokio::select! {
+        r = envio => r,
+        _ = interrupcao::esperar() => return Ok(TurnResult { interrompido: true, ..Default::default() }),
+    };
+    let resp = match enviado {
+        Ok(resp) => resp,
+        // Only a connection that was never established is retried: the request did not reach
+        // the gateway, so nothing ran or was billed. A failure after the request was sent may
+        // have started an inference, and repeating it could pay for it twice.
+        Err(e) if e.is_connect() => {
+            return Ok(TurnResult {
+                error: Some(format!("sem conexão com o gateway ({}): {e}", cfg.url)),
+                retentavel: true,
+                ..Default::default()
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let status = resp.status();
     if !status.is_success() {
+        let retentavel = status_retentavel(status.as_u16());
+        let espera = retry_after(resp.headers());
         // Erro pré-stream (4xx/5xx): mensagem amigável nos casos comuns, senão
         // o corpo {detail}/{message} ou o código cru.
         let txt = resp.text().await.unwrap_or_default();
@@ -73,13 +160,24 @@ pub async fn code_chat(
             429 => "limite atingido (429): 20 requisições/min por chave — espere um instante.".to_string(),
             _ => body_detail.unwrap_or_else(|| format!("HTTP {status}")),
         };
-        return Ok(TurnResult { error: Some(detail), ..Default::default() });
+        return Ok(TurnResult { error: Some(detail), retentavel, retry_after: espera, ..Default::default() });
     }
 
     let mut result = TurnResult::default();
     let mut buf: Vec<u8> = Vec::new();
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        // Dropping the stream on a stop closes the connection; the gateway sees the client
+        // leave, as it does when a browser tab closes.
+        let chunk = tokio::select! {
+            c = stream.next() => c,
+            _ = interrupcao::esperar() => {
+                result.interrompido = true;
+                result.tool_calls.clear();
+                return Ok(result);
+            }
+        };
+        let Some(chunk) = chunk else { break };
         buf.extend_from_slice(&chunk?);
         while let Some(pos) = find(&buf, b"\n\n") {
             let frame: Vec<u8> = buf.drain(..pos + 2).collect();
@@ -89,14 +187,18 @@ pub async fn code_chat(
                 let Ok(raw) = serde_json::from_str::<RawEvent>(json) else { continue };
                 let ev = Event::from_raw(raw);
                 match &ev {
-                    Event::Model { model, server_label } => {
+                    Event::Model { model, server_label, limites } => {
                         result.model = Some(model.clone());
                         result.server_label = Some(server_label.clone());
+                        result.limites = *limites;
                     }
                     Event::TextDelta(d) => result.text.push_str(d),
                     Event::ToolCall(c) => result.tool_calls.push(c.clone()),
                     Event::Usage(u) => result.usage = Some(u.clone()),
-                    Event::Error(e) => result.error = Some(e.clone()),
+                    Event::Error { message, codigo } => {
+                        result.error = Some(message.clone());
+                        result.codigo = codigo.clone();
+                    }
                     Event::Done { text, tool_calls } => {
                         if result.text.is_empty() {
                             result.text = text.clone();
@@ -123,6 +225,30 @@ mod tests {
     use crate::types::{Event, RawEvent};
 
     #[test]
+    fn nova_tentativa_so_para_falha_que_passa_sozinha() {
+        use super::{nova_tentativa, TurnResult, MAX_TENTATIVAS};
+        use std::time::Duration;
+        let falha = |retentavel, segundos: Option<u64>| TurnResult {
+            error: Some("x".into()),
+            retentavel,
+            retry_after: segundos.map(Duration::from_secs),
+            ..Default::default()
+        };
+        // The gateway's Retry-After is what the throttle needs, so it is used as given.
+        assert_eq!(nova_tentativa(&falha(true, Some(7)), 0), Some(Duration::from_secs(7)));
+        // 401/403/422 and SSE errors: the same request fails the same way again.
+        assert_eq!(nova_tentativa(&falha(false, Some(7)), 0), None);
+        // A wait longer than the ceiling is reported, not sat through in silence.
+        assert_eq!(nova_tentativa(&falha(true, Some(600)), 0), None);
+        // Without Retry-After: growing backoff with jitter, never past the attempt limit.
+        let primeira = nova_tentativa(&falha(true, None), 0).unwrap();
+        let terceira = nova_tentativa(&falha(true, None), 2).unwrap();
+        assert!(primeira >= Duration::from_secs(2) && primeira < Duration::from_secs(3), "{primeira:?}");
+        assert!(terceira >= Duration::from_secs(8) && terceira < Duration::from_secs(10), "{terceira:?}");
+        assert_eq!(nova_tentativa(&falha(true, None), MAX_TENTATIVAS), None);
+    }
+
+    #[test]
     fn chat_request_serializa_effort() {
         use crate::types::{ChatRequest, Message};
         let msgs = vec![Message::user("oi")];
@@ -130,6 +256,24 @@ mod tests {
         assert!(serde_json::to_string(&com).unwrap().contains("\"effort\":\"high\""));
         let sem = ChatRequest { messages: &msgs, tools: vec![], profile_name: None, effort: None };
         assert!(!serde_json::to_string(&sem).unwrap().contains("effort"));
+    }
+
+    #[test]
+    fn o_evento_model_traz_os_limites_do_alvo() {
+        use crate::types::Limites;
+        let com: RawEvent = serde_json::from_str(
+            r#"{"kind":"model","data":{"model":"m","server_label":"S","messages_max":5000,"context_window":32768}}"#,
+        )
+        .unwrap();
+        let sem: RawEvent = serde_json::from_str(r#"{"kind":"model","data":{"model":"m","server_label":"S"}}"#).unwrap();
+        match (Event::from_raw(com), Event::from_raw(sem)) {
+            (Event::Model { limites: a, .. }, Event::Model { limites: b, .. }) => {
+                assert_eq!(a, Limites { mensagens: Some(5000), janela: Some(32768) });
+                // An older gateway says nothing: the client keeps the count it always used.
+                assert_eq!(b, Limites::default());
+            }
+            _ => panic!("esperava Model"),
+        }
     }
 
     #[test]

@@ -303,7 +303,13 @@ async fn fase(
     } else {
         Box::new(LocalRunner)
     };
-    agent::run_turn(&cfg_papel, msgs, project, ui, tel, runner.as_mut()).await
+    let texto = agent::run_turn(&cfg_papel, msgs, project, ui, tel, runner.as_mut(), &mut |_, _| {}).await?;
+    // A stop inside any phase ends the whole pipeline: the next phase would act on a plan or
+    // an execution the person just cut short (0.14.0).
+    if crate::interrupcao::ultimo_turno_interrompido() {
+        anyhow::bail!("pipeline interrompido pelo usuário na fase {}", papel.chave());
+    }
+    Ok(texto)
 }
 
 /// Fase que precisa devolver artefato. Uma segunda tentativa com o erro de

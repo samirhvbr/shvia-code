@@ -267,7 +267,7 @@ impl Frontend for Ui {
                 let arg = term::truncate_cols(&arg, room);
                 println!("{} {}({arg})", term::green("●"), term::bold(&verb));
             }
-            Event::ReasoningDelta | Event::Model { .. } | Event::Usage(_) | Event::Error(_)
+            Event::ReasoningDelta | Event::Model { .. } | Event::Usage(_) | Event::Error { .. }
             | Event::Done { .. } | Event::Other => {}
         }
     }

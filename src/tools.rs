@@ -471,16 +471,13 @@ fn executar_bash(root: &Path, command: &str, teto: Option<Duration>) -> String {
     let saida = filho.stdout.take().map(ler_em_thread);
     let erro = filho.stderr.take().map(ler_em_thread);
 
-    let estourou = match teto {
-        None => {
-            let _ = filho.wait();
-            false
-        }
-        Some(t) => {
-            let arvore = Arvore::prender(&filho);
-            esperar_ou_matar(&mut filho, t, &arvore)
-        }
-    };
+    // Always polled, even with the ceiling off (`bash_timeout = 0`): a stop of the turn
+    // (Ctrl-C, the host's `cancel`) must also end the command. The child runs in its own
+    // process group, so the terminal's SIGINT never reaches it, and before 0.14.0 it kept
+    // running after `anna` died.
+    let arvore = Arvore::prender(&filho);
+    let fim = esperar_ou_matar(&mut filho, teto, &arvore);
+    let estourou = fim == Fim::Estourou;
 
     let code = filho.wait().ok().and_then(|st| st.code()).unwrap_or(-1);
     let mut s = saida.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
@@ -488,6 +485,12 @@ fn executar_bash(root: &Path, command: &str, teto: Option<Duration>) -> String {
     if !err.trim().is_empty() {
         s.push_str("\n[stderr]\n");
         s.push_str(&err);
+    }
+    if fim == Fim::Interrompido {
+        return format!(
+            "{}\nERRO: o usuário interrompeu o turno — o comando foi encerrado (grupo de processos morto).",
+            cap(&s, MAX_OUTPUT)
+        );
     }
     if estourou {
         // A mensagem é para o MODELO, e por isso diz o que fazer: sem o "rode em
@@ -511,18 +514,30 @@ fn ler_em_thread<R: std::io::Read + Send + 'static>(mut r: R) -> std::thread::Jo
     })
 }
 
-/// Espera o filho até o teto. Devolve `true` se estourou (e matou).
-fn esperar_ou_matar(filho: &mut Child, teto: Duration, arvore: &Arvore) -> bool {
-    let limite = Instant::now() + teto;
+#[derive(PartialEq)]
+enum Fim {
+    Terminou,
+    Estourou,
+    Interrompido,
+}
+
+/// Espera o filho até o teto (se houver) ou até a interrupção do turno; nos dois casos mata a
+/// árvore inteira.
+fn esperar_ou_matar(filho: &mut Child, teto: Option<Duration>, arvore: &Arvore) -> Fim {
+    let limite = teto.map(|t| Instant::now() + t);
     loop {
         match filho.try_wait() {
-            Ok(Some(_)) => return false,
+            Ok(Some(_)) => return Fim::Terminou,
             Ok(None) => {}
-            Err(_) => return false,
+            Err(_) => return Fim::Terminou,
         }
-        if Instant::now() >= limite {
+        if limite.is_some_and(|l| Instant::now() >= l) {
             arvore.matar(filho);
-            return true;
+            return Fim::Estourou;
+        }
+        if crate::interrupcao::pedido() {
+            arvore.matar(filho);
+            return Fim::Interrompido;
         }
         // 50 ms: o suficiente para não virar espera ocupada e curto o bastante para o
         // teto valer o que diz. Um comando que termina não espera mais que isso.

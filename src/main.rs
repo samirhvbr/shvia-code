@@ -14,6 +14,7 @@ mod diff;
 mod frontend;
 mod gate;
 mod guard;
+mod interrupcao;
 mod json;
 mod memory;
 mod menu;
@@ -254,13 +255,10 @@ fn main() -> anyhow::Result<()> {
             // One-shot (`--json --prompt`): CLI não tem por onde passar imagem.
             run_json_turn(&rt, &cfg, &mut messages, &project, &mut fe, &mut telemetry, runner.as_mut(), prompt, vec![]);
         } else {
-            // Persistente: o host manda {"type":"user","text":"..."} por linha.
-            let mut line = String::new();
-            loop {
-                line.clear();
-                if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
-                    break;
-                }
+            // Persistente: o host manda {"type":"user","text":"..."} por linha. The lines come
+            // through `interrupcao`'s reader, so a `{"type":"cancel"}` also reaches a turn
+            // that is streaming or running a tool (0.14.0).
+            while let interrupcao::Linha::Texto(line) = interrupcao::linha_do_host() {
                 let t = line.trim();
                 if t.is_empty() {
                     continue;
@@ -289,13 +287,19 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Terminal (REPL and `-p`): Ctrl-C stops the turn, not `anna` (0.14.0). An NDJSON host
+    // stops a turn with `{"type":"cancel"}` instead, and keeps the default SIGINT.
+    interrupcao::instalar_ctrl_c(&rt);
+
     let mut ui = Ui::new(non_interactive);
     let mut messages = vec![Message::system(project.system_prompt(host_mode))];
 
     // Modo não-interativo: uma pergunta e sai.
     if let Some(prompt) = cli.prompt {
         messages.push(Message::user(prompt));
-        let turn = rt.block_on(agent::run_turn(&cfg, &mut messages, &project, &mut ui, &mut telemetry, runner.as_mut()));
+        let turn = rt.block_on(agent::run_turn(
+            &cfg, &mut messages, &project, &mut ui, &mut telemetry, runner.as_mut(), &mut |_, _| {},
+        ));
         memory::session_end_blocking(&rt);
         turn?;
         return Ok(());
@@ -463,25 +467,22 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                // Pergunta normal.
+                // Pergunta normal. The session is saved after every round that ran tools and
+                // again when the turn ends (0.14.0): before, only at the end, so a long turn
+                // died with the process.
                 messages.push(Message::user(line));
+                let perfil = cfg.profile.clone();
+                let mut salvar = |m: &[Message], t: &Telemetry| {
+                    if let Some(st) = &store {
+                        salvar_sessao(st, &mut sess, m, t, perfil.as_ref());
+                    }
+                };
                 if let Err(e) = rt.block_on(agent::run_turn(
-                    &cfg, &mut messages, &project, &mut ui, &mut telemetry, runner.as_mut(),
+                    &cfg, &mut messages, &project, &mut ui, &mut telemetry, runner.as_mut(), &mut salvar,
                 )) {
                     ui.error(&e.to_string());
                 }
-
-                // Autosave da sessão (título = 1ª pergunta).
-                if let Some(st) = &store {
-                    if let Some(first) = messages.iter().find(|m| m.role == "user") {
-                        sess.set_title_from(&first.content);
-                    }
-                    sess.messages = messages.clone();
-                    sess.tokens = telemetry.tokens;
-                    sess.cost = telemetry.cost;
-                    sess.model = telemetry.model.clone().or_else(|| cfg.profile.clone());
-                    st.save(&sess);
-                }
+                salvar(&messages, &telemetry);
             }
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
             Err(e) => {
@@ -517,6 +518,18 @@ fn empurrar_turno_usuario(messages: &mut Vec<Message>, text: String, images: Vec
     });
 }
 
+/// Autosave of the REPL session (title = first request).
+fn salvar_sessao(st: &Store, sess: &mut Session, messages: &[Message], tel: &Telemetry, perfil: Option<&String>) {
+    if let Some(first) = messages.iter().find(|m| m.role == "user") {
+        sess.set_title_from(&first.content);
+    }
+    sess.messages = messages.to_vec();
+    sess.tokens = tel.tokens;
+    sess.cost = tel.cost;
+    sess.model = tel.model.clone().or_else(|| perfil.cloned());
+    st.save(sess);
+}
+
 /// Uma volta no modo headless: empurra a pergunta, roda o loop, e erro vira evento.
 #[allow(clippy::too_many_arguments)]
 fn run_json_turn(
@@ -531,7 +544,7 @@ fn run_json_turn(
     images: Vec<String>,
 ) {
     empurrar_turno_usuario(messages, text, images);
-    if let Err(e) = rt.block_on(agent::run_turn(cfg, messages, project, fe, tel, runner)) {
+    if let Err(e) = rt.block_on(agent::run_turn(cfg, messages, project, fe, tel, runner, &mut |_, _| {})) {
         fe.error(&e.to_string());
     }
 }

@@ -3,6 +3,132 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.1 - Prune old and stale tool outputs to one-line stubs before dropping any message
+
+0.15.0 made the window a budget, but the only way to fit it was still to drop whole messages,
+which loses the trail of what was done along with the bulk of what came back. Most of a coding
+turn's tokens are tool outputs: file reads, searches, command logs. Hermes prunes old tool
+outputs before it summarizes, and claw-code drops reads that a later write made stale
+(comparison of 02/11/2026).
+
+- When the token budget triggers, tool outputs are pruned first: a `read_file` whose file a
+  later `edit_file`/`write_file` changed (its content is stale, and a model that trusts it
+  edits against text that is no longer there), and outputs over 600 characters older than the
+  recent ~20% of the window. Each becomes one line naming the tool and its target —
+  `[saída antiga: read_file src/x.rs devolveu 2000 caracteres, removidos para caber na janela
+  do modelo — rode de novo se precisar.]` — so the call and the fact that it ran stay.
+- Messages are dropped only if pruning was not enough. The latest assistant turn and its
+  results are never pruned, a stub is never pruned twice, and pruning runs only when the
+  budget triggers, so the prefix the provider caches changes rarely.
+- The warning says what happened: outputs summarized, messages dropped, or both.
+- Without a known window (older gateway, unknown model) nothing changes: the count cut is
+  the 0.13.6 one, and the count cut never prunes.
+
+Test: `saida_velha_vira_resumo_antes_de_qualquer_mensagem_sair` (30 reads against a 16k window:
+no message leaves, 20+ outputs become stubs, the stale recent read goes, the other recent
+reads and the latest round stay whole, and a second pass changes nothing). The 0.15.0 token
+test now uses outputs small enough to stay whole, so it still measures the drop. Reversals,
+each red: no pruning, no stale-read rule. Docs: `docs/protocolo.md` §2,
+`docs/arquitetura-cli.md` §4, `docs/USER-GUIDE.md`.
+
+## 0.15.0 - Budget the history against the target's context window and retry once when the provider refuses the request
+
+The only budget was a count: past 150 messages, cut to 100, sized for the gateway's
+200-message validation and blind to tokens. A local model served with `num_ctx` 32k got up to
+150 messages; Ollama then either cut the start of the prompt in silence or, with
+`truncate:false` (on by default since 08/08/2026), refused with a 400 that ended the turn. The
+gateway has classified that refusal since 22/09/2026 (`codigo: provedor_recusou_pedido`, with
+a comment saying `anna` could read the error but never handle it), and it knows the target's
+window (`ModelMetadata::contextWindow`), but neither reached the client.
+
+- **The `model` event's `messages_max` and `context_window` set the budget** (both optional;
+  the matching shvia-web change sends them). The count ceiling becomes `messages_max` (cut past
+  3/4, down to 1/2); without a window it stays capped at 200, since a count is then the only
+  budget. With a window the history is also cut when its estimate passes 70% of it, down to
+  50%, so cuts stay rare and the prefix stays cacheable.
+- **The estimate is calibrated by the provider's own count:** chars/4 of the messages and tool
+  definitions, scaled by the last `usage.prompt_tokens` over the chars/4 of the request that
+  produced it (clamped to 0.3–4), which absorbs the tokenizer, the gateway's tool-output
+  compression and its system prompt. The limits and the factor live in `Telemetry`, so the
+  next turn starts already budgeted.
+- **A token cut keeps what the model is about to act on:** the latest assistant turn and its
+  tool results always stay, with the first and the latest requests and the single marker,
+  which now says whether the cut was for the gateway's ceiling or the model's window.
+- **A provider refusal is retried once in the same round**, with the history cut to half of
+  what was just sent, and a warning that says so. Classified by the gateway's code, never by
+  the provider's wording. Any other cause fails the same way again and is reported as before.
+- An older gateway sends neither field and nothing changes: the count is the 0.13.6 one.
+
+Hermes budgets by window fraction (50–75%) and claw-code recovers from overflow reactively;
+this takes both, without a summarizing model (comparison of 02/11/2026). Tests:
+`com_a_janela_conhecida_o_corte_e_por_tokens_e_guarda_o_que_importa`,
+`o_evento_model_traz_os_limites_do_alvo` and, against the scripted gateway,
+`a_provider_refusal_is_retried_once_with_a_shorter_history`. Reversals, each red: no token
+budget, no recovery. The existing count tests caught a regression on the way (the latest-turn
+guard had leaked into the count cut). Docs: `docs/protocolo.md` §2–§3, `docs/arquitetura-cli.md`
+§4, `docs/USER-GUIDE.md`.
+
+## 0.14.0 - Stop a turn with Ctrl-C or the host's cancel without killing anna, and save each round
+
+Nothing handled SIGINT during a turn. Ctrl-C ended `anna` itself; the REPL saved the session
+only after the turn, so the whole turn's history was lost; and a running `bash` child kept
+going on its own, because it runs in its own process group, out of the terminal's reach. A
+host had no way to stop a turn short of killing the sidecar. Hermes and claw-code both stop
+the turn and keep the transcript valid (comparison of 02/11/2026).
+
+- **One stop flag** (`src/interrupcao.rs`), raised by Ctrl-C in the terminal (REPL and `-p`)
+  or by `{"type":"cancel"}` from an NDJSON host, and checked where the turn waits: the
+  request and the stream (dropped, closing the connection), the 0.13.10 retry wait, between
+  tool calls, inside `bash` (which kills its process group, even with `bash_timeout = 0`),
+  and while a host decides a gate or runs a command.
+- **The history stays valid.** A cut-off answer is kept as an assistant message with what was
+  already shown, marked `[interrompido pelo usuário]`, and its tool calls are dropped unrun.
+  Every tool call not yet run gets `RECUSADO: o usuário interrompeu o turno…`, so the next
+  request carries no orphan call. The turn ends with `turn_end`, never an error.
+- **A second Ctrl-C ends `anna`** (exit 130), as does Ctrl-C when no turn runs: the way out
+  of anything that does not look at the flag. At the REPL prompt Ctrl-C still exits as before.
+- **NDJSON (protocol addition, hence 0.14.0):** one engine thread reads stdin, so `cancel`
+  reaches a streaming turn; other lines are queued in order. `cancel` also stops a `user` turn
+  already queued and is ignored when nothing runs; `exit` also stops the turn in progress. A
+  stopped turn emits `{"type":"interrupted"}` before `usage` and `turn_done`. Old hosts that
+  never send `cancel` see no change.
+- **The REPL saves the session after every round that ran tools**, and again when the turn
+  ends. `run_turn` gained `ao_fim_da_volta` for that; the planning pipeline stops when any
+  phase is interrupted, instead of acting on a cut-short plan.
+
+`tokio` gains `signal` (its `signal-hook-registry` was already in the lockfile through
+crossterm). Tests, against the scripted gateway: `ctrl_c_stops_the_turn_not_anna_and_each_round_is_saved_before_the_turn_ends`
+(a real SIGINT to the REPL) and `ndjson_cancel_kills_the_running_command_and_answers_every_pending_call`
+(`sleep 30` killed within the test's seconds). Four reversals, each red: no Ctrl-C handler
+(anna dies), no per-round save (no session mid-turn), `bash` ignoring the flag (15 s
+timeout), no synthetic result (the second call runs). Docs: `docs/embedding.md`,
+`docs/USER-GUIDE.md`, `docs/arquitetura-cli.md`, `docs/ferramentas.md`, `SECURITY_GUIDELINES.md`.
+
+## 0.13.10 - Retry a gateway round that failed before the stream opened, honoring Retry-After
+
+The gateway throttles each key (`/code/chat`, 20 requests per minute by default) and every
+round of a turn is one request, while reads run without approval. A fast turn goes over the
+limit, and the 429 ended the turn with an error: the work stopped mid-way and the person had to
+say "continua". Hermes and claw-code both retry with backoff (comparison of 02/11/2026).
+
+- A round that fails **before the stream opens** with 429, 408, 502, 503 or 504, or that never
+  connected, is sent again up to 4 times. The wait is the gateway's `Retry-After` (Laravel's
+  throttle sends it with every 429); without it, 2, 4, 8, 16 s capped at 30 s, plus up to 20%
+  jitter. Each wait shows a `warn` (terminal and NDJSON) with the reason and the attempt.
+- A `Retry-After` above 120 s is reported instead of waited for.
+- **Not retried, on purpose:** 400/401/403/422 fail the same way again; a 500 is a gateway
+  defect; an SSE `error` comes after the gateway already ran its own failover; and a connection
+  that broke after the request was sent may have started a billed inference, which a retry
+  could pay for twice. Nothing the person has seen is ever repeated: a retry happens only when
+  no event reached the frontend.
+
+`tokio` gains its `time` feature for the wait (no new crate in the lockfile). Tests:
+`nova_tentativa_so_para_falha_que_passa_sozinha` (unit) and
+`a_rate_limited_round_is_retried_after_the_gateways_retry_after`, which runs the real binary
+against a scripted loopback gateway (`tests/common`, shared with the next process-level
+tests); with the retry disabled it fails with a single request. Docs: `docs/protocolo.md` §5,
+`docs/arquitetura-cli.md` §4.
+
 ## 0.13.9 - Apply the secrets denylist to grep and to the real target of every file tool
 
 An external review (26/10/2026) found three ways around the confinement and the secrets denylist

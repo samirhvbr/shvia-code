@@ -7,6 +7,7 @@
 use crate::diff;
 use crate::frontend::Frontend;
 use crate::gate::{Policy, Preview};
+use crate::interrupcao;
 use crate::telemetry::Telemetry;
 use crate::types::{Event, ToolCall};
 use serde_json::{json, Value};
@@ -50,7 +51,7 @@ fn preview_json(p: &Preview) -> Value {
 impl Frontend for JsonSink {
     fn on_event(&mut self, ev: &Event) {
         match ev {
-            Event::Model { model, server_label } => {
+            Event::Model { model, server_label, .. } => {
                 self.emit(json!({"type":"model","model":model,"server":server_label}))
             }
             Event::TextDelta(d) => self.emit(json!({"type":"text","delta":d})),
@@ -78,6 +79,12 @@ impl Frontend for JsonSink {
 
     fn warn(&mut self, msg: &str) {
         self.emit(json!({"type":"warn","message":msg}));
+    }
+
+    fn turno_interrompido(&mut self) {
+        // A machine-readable marker before `usage`/`turn_done`, so a host can tell a stopped
+        // turn from a finished one without parsing the warning text.
+        self.emit(json!({"type":"interrupted"}));
     }
 
     fn continuar_apos_teto(&mut self, _teto: usize) -> bool {
@@ -124,11 +131,12 @@ impl Frontend for JsonSink {
         // Robustez: linhas em branco ou sem "decision" (ex.: um {"type":"user"} que
         // chegou fora de hora) são IGNORADAS em vez de virarem um reject silencioso;
         // um {"type":"exit"} durante o gate cancela (nega, seguro); EOF → nega.
+        // A `cancel` while the gate waits stops the turn: the action is refused (0.14.0).
         loop {
-            let mut line = String::new();
-            if io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
-                return false; // stdin fechado → nega (seguro)
-            }
+            let line = match interrupcao::linha_do_host_no_turno() {
+                interrupcao::Linha::Texto(l) => l,
+                interrupcao::Linha::Fim | interrupcao::Linha::Interrompido => return false,
+            };
             let t = line.trim();
             if t.is_empty() {
                 continue;

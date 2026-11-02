@@ -74,3 +74,28 @@ fn the_same_call_with_the_same_result_is_told_at_three_and_stopped_at_five() {
     assert!(seen.iter().any(|e| e["type"] == "warn" && e["message"].as_str().unwrap().starts_with("turno parado")));
     assert!(seen.iter().any(|e| e["type"] == "text" && e["delta"] == "I kept reading a.txt; I need to know what to change in it."));
 }
+
+#[test]
+fn the_prompt_carries_the_project_rules_and_a_subfolder_with_its_own_is_pointed_out_on_first_touch() {
+    let home = Home::new();
+    std::fs::create_dir_all(home.0.join(".git")).unwrap();
+    std::fs::write(home.0.join("CLAUDE.md"), "# Root\nRoot rules.").unwrap();
+    std::fs::create_dir_all(home.0.join("pkg/src")).unwrap();
+    std::fs::write(home.0.join("pkg/AGENTS.md"), "# pkg\nUse pnpm.").unwrap();
+    std::fs::write(home.0.join("pkg/src/main.ts"), "export {}").unwrap();
+    let (url, server) = gateway(vec![
+        tools(vec![tool_call("r1", "read_file", json!({"path": "pkg/src/main.ts"}))]),
+        text("ok"),
+    ]);
+    let mut live = Live::start(&home, &url);
+    live.send(json!({"type": "user", "text": "look at pkg"}));
+    live.wait_for(|e| e["type"] == "turn_done");
+    live.finish();
+    let requests = server.join().unwrap();
+
+    let sistema = requests[0]["messages"][0]["content"].as_str().unwrap();
+    assert!(sistema.contains("--- CLAUDE.md ---\n# Root\nRoot rules."), "{sistema}");
+    let leitura = last(&requests[1]);
+    assert_eq!(leitura["tool_call_id"], "r1");
+    assert!(leitura["content"].as_str().unwrap().contains("instruções próprias em pkg/AGENTS.md"), "{leitura}");
+}

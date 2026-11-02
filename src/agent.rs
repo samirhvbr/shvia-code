@@ -631,6 +631,10 @@ pub async fn run_turn(
                     }
                     Veredito::Parar(o_que) => parada = Some(o_que),
                 }
+                // A subfolder with rules of its own, the first time a tool goes there (0.15.6).
+                if let Some(nota) = call.arguments.get("path").and_then(|p| p.as_str()).and_then(|p| project.nota_de_instrucoes(p)) {
+                    out.push_str(&nota);
+                }
                 out
             };
             messages.push(Message::tool(call.id.clone(), out));

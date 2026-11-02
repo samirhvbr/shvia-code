@@ -8,7 +8,12 @@
 //! Anna" como prompt injection. O modelo do Modo Code não deve nem tomar
 //! conhecimento da Anna; o nome `anna` segue sendo só o BINÁRIO/CLI.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// Folders whose instruction file was already pointed out in this process (0.15.6).
+static APONTADAS: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
 
 /// Instruction files, in the order one folder's file is chosen (0.15.5: per folder, from the root
 /// down to where `anna` runs). ANNA.md comes first because it is the short context written for
@@ -138,6 +143,50 @@ impl Project {
         format!("{base}\n\n{}", self.bloco_contexto())
     }
 
+    /// A one-line pointer to the instruction file of the folder a tool just touched, the first
+    /// time it is touched in this process (0.15.6), or `None`.
+    ///
+    /// The prompt carries the files from the root down to the working folder; a subfolder the
+    /// model wanders into may have rules of its own (a package in a monorepo, a vendored tool),
+    /// and nothing told it. Hermes appends that folder's AGENTS.md to the tool result on first
+    /// touch (comparison of 02/11/2026); this appends only where it is and its size, because a
+    /// tool result stays in the history and is resent on every later round. The nearest folder
+    /// with a file decides: when it is already in the prompt, listed, or pointed out, nothing is
+    /// added. Paths are canonical, so `../` never points at a file outside the project.
+    pub fn nota_de_instrucoes(&self, caminho: &str) -> Option<String> {
+        let raiz = self.root.canonicalize().ok()?;
+        let alvo = raiz.join(caminho);
+        let pasta = if alvo.is_dir() { alvo } else { alvo.parent()?.to_path_buf() };
+        let mut pasta = pasta.canonicalize().ok()?;
+        if !pasta.starts_with(&raiz) {
+            return None;
+        }
+        let conhecidas: HashSet<PathBuf> = self
+            .instrucoes
+            .iter()
+            .map(|i| i.rel.as_str())
+            .chain(self.outras.iter().map(|(rel, _)| rel.as_str()))
+            .filter_map(|rel| raiz.join(rel).parent().map(Path::to_path_buf))
+            .collect();
+        let mut apontadas = APONTADAS.lock().unwrap_or_else(|e| e.into_inner());
+        let apontadas = apontadas.get_or_insert_with(HashSet::new);
+        while pasta != raiz && pasta.starts_with(&raiz) {
+            if let Some(arquivo) = NOMES.iter().map(|n| pasta.join(n)).find(|f| f.is_file()) {
+                if conhecidas.contains(&pasta) || !apontadas.insert(pasta.clone()) {
+                    return None;
+                }
+                let rel = arquivo.strip_prefix(&raiz).ok()?.to_string_lossy().replace('\\', "/");
+                let n = std::fs::read_to_string(&arquivo).map(|t| t.chars().count()).unwrap_or(0);
+                return Some(format!(
+                    "\n\n[anna: esta pasta tem instruções próprias em {rel} ({n} caracteres), fora do contexto \
+                     carregado. Leia com read_file antes de mexer aqui.]"
+                ));
+            }
+            pasta = pasta.parent()?.to_path_buf();
+        }
+        None
+    }
+
     /// Cabeçalho do projeto + instruções do repo (ANNA.md/CLAUDE.md/AGENTS.md).
     /// Separado do system prompt do agente porque os papéis do orquestrador
     /// (arquiteto/executor/revisor) montam prompts próprios e precisam do mesmo
@@ -235,6 +284,27 @@ mod tests {
         assert!(bloco.contains(&format!("CLAUDE.md tem {total} caracteres; aqui estão os primeiros 6000")), "the cut is said: {bloco}");
         assert!(bloco.contains("app/AGENTS.md (20 caracteres)"), "a different file in the chain is listed: {bloco}");
         assert!(!bloco.contains("AGENTS.md (7015"), "a mirror is neither loaded nor listed: {bloco}");
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn a_subpasta_com_instrucoes_proprias_e_apontada_uma_vez() {
+        let raiz = projeto(&[
+            ("CLAUDE.md", "# raiz\nregras".into()),
+            ("pkg/AGENTS.md", "# pkg\nUse pnpm.".into()),
+            ("pkg/src/main.ts", "x".into()),
+            ("lib/util.rs", "x".into()),
+        ]);
+        let p = Project::detectar_em(&raiz);
+        let nota = p.nota_de_instrucoes("pkg/src/main.ts").expect("first touch below pkg/");
+        assert!(nota.contains("pkg/AGENTS.md (15 caracteres)"), "{nota}");
+        assert_eq!(p.nota_de_instrucoes("pkg/other.ts"), None, "pointed out once per folder");
+        assert_eq!(p.nota_de_instrucoes("lib/util.rs"), None, "no file of its own: nothing to say");
+        assert_eq!(p.nota_de_instrucoes("CLAUDE.md"), None, "the root's file is already in the prompt");
+        assert_eq!(p.nota_de_instrucoes("../fora/x"), None, "never outside the project");
+        // Running inside pkg/, its file is in the prompt already.
+        let dentro = Project::detectar_em(&raiz.join("pkg"));
+        assert!(dentro.instrucoes.iter().any(|i| i.rel == "pkg/AGENTS.md"));
         let _ = std::fs::remove_dir_all(&raiz);
     }
 

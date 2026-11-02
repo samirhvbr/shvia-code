@@ -13,7 +13,10 @@ characters of each, and 9,000 in all, enter the project prompt, which is resent 
 round. A cut file says so, with its size, so the model can read the rest with `read_file`;
 a file that is the same rules under another title (this fleet mirrors CLAUDE.md and
 AGENTS.md below the H1) is loaded once; and the other instruction files found are listed
-by name and size, not loaded.
+by name and size, not loaded. The first time a tool touches a subfolder whose nearest
+instruction file is not in the prompt, its result gets one line pointing at that file and
+its size (0.15.6+), once per folder per process; the file itself is read only if the model
+asks for it.
 
 Tools use the detected project root. Run session resume from the original project;
 the stored session does not bind itself to a project directory. Git worktree roots are

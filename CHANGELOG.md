@@ -3,6 +3,28 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.6 - Point the model at a subfolder's own instruction file the first time a tool goes there
+
+0.15.5 loads the instruction files from the root down to the working folder, but a model often
+works in a subfolder it was not started in — a package of a monorepo, a vendored tool — and that
+folder's AGENTS.md or CLAUDE.md never reached it. Hermes appends that file to the tool result on
+the first touch (`subdirectory_hints`, comparison of 02/11/2026).
+
+- When a tool with a `path` (`read_file`, `edit_file`, `write_file`, `list_dir`, `grep`) touches a
+  folder whose nearest instruction file is neither in the prompt, nor listed in it, nor already
+  pointed out, its result gets one line: `[anna: esta pasta tem instruções próprias em
+  pkg/AGENTS.md (15 caracteres), fora do contexto carregado. Leia com read_file antes de mexer
+  aqui.]`. Once per folder per process.
+- **A pointer, not the file:** a tool result stays in the history and is resent on every later
+  round, so the rules are read only when the model asks for them.
+- Paths are canonical before anything is looked up, so `../` never points at a file outside the
+  project.
+
+Tests: `a_subpasta_com_instrucoes_proprias_e_apontada_uma_vez` (unit) and, against the scripted
+gateway, `the_prompt_carries_the_project_rules_and_a_subfolder_with_its_own_is_pointed_out_on_first_touch`
+(which also checks the 0.15.5 block in the real system prompt). Reversals, each red: no pointer,
+pointed out every time, the hook in the loop removed. Docs: `docs/USER-GUIDE.md`.
+
 ## 0.15.5 - Load the instruction file of every folder down to the working one, and say when one is cut
 
 The project prompt took the first of ANNA.md, CLAUDE.md and AGENTS.md at the repository root,

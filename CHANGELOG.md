@@ -3,6 +3,23 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.8 - Ignore a gate decision that names another gate, so a late approval never decides the next one
+
+In NDJSON mode a gate took the next `{"decision": …}` line whatever its `id` (the documentation
+said so: "this engine currently consumes the next decision without enforcing its ID", an open
+finding of the 15/10/2026 review). Since 0.14.0 one reader thread queues the host's lines, and a
+`cancel` closes a pending gate: an approval the host sent for that gate a moment too late stays in
+the queue, and the next gate — another command — took it as its own. A command the person never
+saw would run.
+
+- A decision whose `id` is not the waiting gate's is ignored, with a `warn` naming both, and the
+  gate keeps waiting for its own. A decision without `id` is still taken, so older hosts keep
+  working; the page of the Code mode already sends the `id`.
+
+Test: `a_decision_for_another_gate_never_decides_this_one` (process level: a stale approval
+arrives before the person's rejection, and the command does not run; red without the check).
+Docs: `docs/embedding.md`.
+
 ## 0.15.7 - Refuse to overwrite a file the model has not seen as it is now
 
 A whole-file `write_file` replaces the file with what the model believes is in it. When that

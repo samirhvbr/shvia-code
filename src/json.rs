@@ -143,6 +143,16 @@ impl Frontend for JsonSink {
             }
             let v: Value = serde_json::from_str(t).unwrap_or(Value::Null);
             if let Some(decision) = v.get("decision").and_then(|d| d.as_str()) {
+                // A decision names its gate (0.15.8). One for another gate — a late answer to a gate
+                // that a cancel or an exit already closed, still queued — must not decide this one:
+                // it would approve a command the person never saw. Until 0.15.8 the next decision
+                // was taken whatever its id. A host that sends no id keeps the old behavior.
+                if let Some(outro) = v.get("id").and_then(|x| x.as_str()) {
+                    if !id.is_empty() && outro != id {
+                        self.warn(&format!("decisão para outro gate ({outro}) ignorada; este espera {id}"));
+                        continue;
+                    }
+                }
                 return match decision {
                     "approve" => true,
                     "always" if policy == Policy::Confirm => {

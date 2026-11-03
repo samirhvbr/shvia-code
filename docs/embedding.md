@@ -37,7 +37,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | `{"type":"user","text":"...","images":["BASE64"]}` | starts a persistent turn; `images` is optional, pure base64 without a data URL prefix |
 | `{"type":"exit"}` | encerra o motor (0.14.0+: also stops the turn in progress first) |
 | `{"type":"cancel"}` | **stops the turn in progress** (0.14.0+): the stream is dropped, a running `bash` is killed with its process group, a pending gate is refused, and every tool call not yet run gets a `RECUSADO` result; then `interrupted`, `usage`, `turn_done`. Also stops a `user` turn already queued; ignored when nothing is running or queued |
-| `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`** (hosts should correlate IDs; this engine currently consumes the next decision without enforcing its ID) |
+| `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`**. Since 0.15.8 a decision whose `id` is another gate's is ignored with a `warn` (a late answer to a gate a `cancel` already closed must not decide the next one); a decision without `id` is still taken, for older hosts — send the `id` |
 | `{"id":"…","decision":"continue"\|"stop","message":"…"}` | **answer to a `stop_request`** (engines that hold a turn open — see the handshake below; `anna` never asks) |
 
 ### `anna` → Host (stdout)

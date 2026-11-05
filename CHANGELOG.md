@@ -3,6 +3,12 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.11 - Mark the gateway profile-pin finding resolved against current Web
+
+The protocol and review-status guides still said an explicit anna profile could be overwritten by the active Code project pin. That Web defect was fixed later on November 5. Recheck Web 2db8252a (2.114.138), including CodeChatController::stream and PinDoProjetoDeCodeTest. State that an explicit model or profile_name excludes both pin halves, and retain the earlier observation as dated, resolved history. This changes no gateway or CLI logic.
+
+Documentation-only review; runtime version carriers stay unchanged under the requested scope. This draft requires normal version integration before landing.
+
 ## 0.15.11 - Require confirmation for shell escapes outside single quotes
 
 The automatic shell gate now asks before running a command with a backslash outside

@@ -1,15 +1,22 @@
-# Claude Code profile — ShvIA Desktop
+# Claude Code profile — ShvIA Code (`anna`)
 
 This project's `.claude/` follows the Blue3/samirhvbr repo standard: permissions
-posture and effort, and nothing else. Target stack: **Tauri 2 (Rust) + web shell
-(npm/Vite) + Python sidecar (arrives in F2)** — the server is remote, so **no
-database and no secret runs here**.
+posture and effort, and nothing else. Target stack: **a single Rust CLI (`anna`)
+plus Bash build/install/release scripts** — the gateway is remote (ShvIA Web), so
+**no database and no secret runs here**; the user's ShvIA key lives in the user's
+local configuration, outside the repository.
+
+> Until 2026-11-05 this file's title and stack line named ShvIA Desktop (Tauri 2, npm/Vite,
+> a Python sidecar). The allow-list below dropped the entries for that stack (Tauri, npm,
+> Node, Python, pytest, bats), which this repository has no use for.
 
 ## Files
 
 | File | Role |
 |------|------|
 | `settings.json` | The **active** profile (versioned). Today = `effortLevel: xhigh`, `defaultMode: plan`, and the security **deny-list** only. It chooses **no model**. |
+| `skills/loop-work/` | Vendored copy of the `loop-work` skill (its `VERSION.md` names the source and version). |
+| `prompts/continuacao.md`, `prompts/reabastecimento.md` | The Stop-hook prompt templates that skill returns to resume the agent. |
 
 > The **allow-list** (shortcuts that avoid repeated prompts) is **deliberately**
 > absent from `settings.json`: granting the agent a permission is **your** act.
@@ -23,13 +30,9 @@ database and no secret runs here**.
   "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
   "Bash(git show:*)", "Bash(git branch:*)",
   "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)",
-  "Bash(node -c:*)", "Bash(node --check:*)",
-  "Bash(npm run dev:*)", "Bash(npm run build:*)", "Bash(npm run tauri:*)",
-  "Bash(npm install:*)", "Bash(npx tauri info:*)",
   "Bash(cargo check:*)", "Bash(cargo build:*)", "Bash(cargo test:*)",
   "Bash(cargo fmt:*)", "Bash(cargo clippy:*)",
-  "Bash(python -m py_compile:*)", "Bash(python3 -m py_compile:*)",
-  "Bash(pytest:*)", "Bash(bats:*)", "Bash(shellcheck:*)"
+  "Bash(shellcheck:*)"
 ]
 ```
 

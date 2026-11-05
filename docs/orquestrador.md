@@ -18,12 +18,15 @@ pedido → [arquiteto] → plano.json → VOCÊ aprova → [executor] → diff
                                                                  pronto
 ```
 
-> **Current boundary (2026-10-15):** implemented in the terminal only, with local
-> tools and separate role histories. Pipeline state is not durably resumable. Automatic
-> verification skips non-allowlisted/unspawnable commands with a warning and currently
-> uses a subprocess path without the shell tool's timeout. Treat successful review as
-> a model verdict, not proof that all configured checks ran. See the
-> [source findings](DOCUMENTATION-REVIEW-20261015.md).
+> **Current boundary (2026-10-15, rechecked against 0.15.8 on 2026-11-05):** implemented
+> in the terminal only, with local tools and separate role histories. Pipeline state is not
+> durably resumable, and a `/plano` run is not written to the session store. Automatic
+> verification skips non-allowlisted/unspawnable commands with a warning and still uses a
+> subprocess path (`falha_verificacao`) without the shell tool's timeout or turn stop.
+> Since 0.14.0 a Ctrl-C that stops an architect, executor or reviewer turn ends the
+> pipeline instead of letting the next phase act on a cut-short result. Treat successful
+> review as a model verdict, not proof that all configured checks ran. See the
+> [source findings](DOCUMENTATION-REVIEW-20261015.md#status-on-2026-11-05).
 
 ## Por que papéis, e não um roteador
 

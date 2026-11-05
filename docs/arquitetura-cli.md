@@ -1,7 +1,8 @@
 # Architecture of the `anna` CLI
 
-> **Current source map, reviewed 2026-10-15.** Source inspection and local checks do
-> not certify live gateway behavior or installed Desktop/Workspace integration.
+> **Current source map, reviewed 2026-10-15 and rechecked against 0.15.8 on 2026-11-05.**
+> Source inspection and local checks do not certify live gateway behavior or installed
+> Desktop/Workspace integration.
 > [User guide](USER-GUIDE.md) · [tools](ferramentas.md) · [embedding](embedding.md) ·
 > [development and distribution](DEVELOPMENT.md) · [security](../SECURITY_GUIDELINES.md).
 
@@ -99,7 +100,10 @@ There is no eventsource-stream, ratatui or thiserror dependency. SSE framing is 
    empty assistant turn). With tool calls, run them through the selected runner, append
    the tool results, and repeat. With a final answer, end the turn. The next request
    therefore carries what the assistant already said, and terminal autosave/resume keep
-   it; `tests/assistant_history.rs` checks this against a local SSE fixture.
+   it; `tests/assistant_history.rs` checks this against a local SSE fixture. A tool that
+   names a `path` in a subfolder whose own instruction file is not in the prompt gets a
+   one-line pointer to that file appended to its result, once per folder (0.15.6+;
+   `Project::nota_de_instrucoes`).
 6. A stop (terminal Ctrl-C, NDJSON `cancel`/`exit`; 0.14.0+) is checked in the stream,
    the retry wait, between tool calls, inside `bash` (which kills its process group) and
    in gate/host-result waits. The turn then ends with a valid history: a cut-off answer is
@@ -165,16 +169,22 @@ Linux Release asset workflow. NDJSON embedding, host delegation, task lists and 
 planning pipeline also exist; they must not all remain labeled C5 future work.
 
 **Proposed, not implemented:** `anna models`/`anna infras` and matching slash-commands,
-favorites/catalog browsing, ShvIA skills/RAG integration, MCP tools, structured test
-execution, OS sandboxing, parallel agents and NDJSON planning-pipeline gates. The earlier
+favorites/catalog browsing, client-side ShvIA skills/RAG integration, MCP tools, structured test
+execution, OS sandboxing, parallel agents and NDJSON planning-pipeline gates. (The gateway
+already prefixes ai-memory and Code-project skills server-side on some turns; see
+[protocol](protocolo.md) §2. That is ShvIA Web behavior, not a client feature.) The earlier
 catalog proposal used Web endpoints; their current availability/authorization needs
 verification in ShvIA Web before implementing a client. Preserve the original scope in
 [.continue](../.continue/escopo-projeto.md) as a design record.
 
 ## 8. Verification
 
-`cargo test --locked` exercises the Rust tests, including the module inventory in this
-section and the AGENTS/CLAUDE mirror. It does not contain a full mock-gateway closed-loop
-integration suite. A passing local build is not proof of provider tool-calling quality,
-installed terminal acceptance or packaged-host behavior. See the
+`cargo test --locked` exercises the Rust tests, including the module inventory in §2, the
+AGENTS/CLAUDE mirror and the SHA pin of every CI action. Process-level tests in `tests/`
+(Unix only) run the real binary against a scripted loopback gateway (`tests/common`):
+final answers in history, retry after `Retry-After`, Ctrl-C and NDJSON `cancel`, provider
+refusal recovery, the round-ceiling summary, the stall guard, instruction-file loading and
+gate decision IDs. The scripted gateway answers what each test scripts; it is not ShvIA Web.
+A passing local build is not proof of provider tool-calling quality, installed terminal
+acceptance or packaged-host behavior. See the
 [review](DOCUMENTATION-REVIEW-20261015.md) for source findings and checks obtained.

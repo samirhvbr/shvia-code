@@ -1,7 +1,8 @@
 # User guide
 
-This guide describes the source reviewed on 2026-10-15. Local checks do not replace a
-live model/tool round trip or acceptance in a packaged host.
+This guide describes the source of 0.15.8, rechecked on 2026-11-05 (first written on
+2026-10-15). Local checks do not replace a live model/tool round trip or acceptance in a
+packaged host.
 
 ## Project context
 
@@ -47,10 +48,11 @@ local execution. `config set-key` also accepts a positional key, but stdin avoid
 exposing a secret through shell history or process arguments. There is no runtime
 `--api-key`, `--allow-writes`, `models`, `infras`, login or updater subcommand.
 
-Do not use process exit status alone as proof of a successful answer: some gateway
-errors currently return through a successful Rust result. Hosts must handle `error`
-and process closure in addition to `turn_done`; see the
-[review](DOCUMENTATION-REVIEW-20261015.md).
+Do not use process exit status alone as proof of a successful answer: a gateway error
+reported in the stream or before it (4xx/5xx, an SSE `error`, or a connection that never
+opened, after its retries) ends `-p` with exit status 0; a missing key, an unsafe URL and a
+connection that broke after the request was sent exit non-zero. Hosts must handle `error` and process closure in
+addition to `turn_done`; see the [review status](DOCUMENTATION-REVIEW-20261015.md#status-on-2026-11-05).
 
 ## Configuration
 
@@ -86,8 +88,8 @@ effort = "high"
 | Setting | Precedence and default |
 |---|---|
 | URL | `--url` → `SHVIA_URL` → `url` → `https://ai.shvia.org` |
-| Profile | `--model` → `SHVIA_PROFILE` → `profile` → gateway's user default |
-| Effort | `--effort` → nonempty `SHVIA_EFFORT` → `effort` → gateway default |
+| Profile | `--model` → `SHVIA_PROFILE` → `profile` → gateway default (the active Code project's pin, then the user's default; see [protocol](protocolo.md#2-corpo-da-requisição-json)) |
+| Effort | `--effort` → nonempty `SHVIA_EFFORT` → `effort` → gateway default (the active Code project's effort pin, then the server's) |
 | API key | Nonempty `SHVIA_API_KEY` → `api_key` in the configuration file |
 | Round limit | Parseable `SHVIA_MAX_VOLTAS` → `max_voltas` → 100; minimum 1 |
 | Shell timeout | Parseable `SHVIA_BASH_TIMEOUT` → `bash_timeout` → 120 seconds; 0 disables it |
@@ -129,6 +131,12 @@ receive session approval. `t` applies to a tool scope, such as `write_file` or `
 until the process exits. Automatic shell commands can include builds and tests;
 they run project code and can have side effects.
 
+Two write rules act before or above the approval card ([tools](ferramentas.md)):
+`write_file` over an existing file is refused unless the model has read the whole file in
+this process and it has not changed since (0.15.7+; `edit_file` is not affected), and a
+write to `ANNA.md`, `AGENTS.md`, `CLAUDE.md` or `CLAUDE.local.md` always asks, even after
+`t` (0.15.4+).
+
 Output is a scrolling `rustyline` REPL with Markdown, tool summaries, a spinner and
 usage footer, not a full-screen editor. TTY detection controls color; `NO_COLOR`
 disables it and `FORCE_COLOR=1` can force it. Non-TTY prompts use line input instead
@@ -145,15 +153,24 @@ that every desired test executed.
 Normal REPL turns autosave under `~/.shvia-code/sessions/`, after every round that ran
 tools and when the turn ends (0.14.0+; before, only when the turn ended). JSON contains the message
 history retained by the loop, first-prompt title, usage totals and model metadata.
-The loop compacts long history: past 150 messages it cuts down to 100, keeping the
-session's first request and the latest one. Since 0.15.0, when the gateway reports the
-model's context window, the history is also cut when it fills 70% of it (down to 50%), and
-a request the provider refuses (usually a full context) is retried once with a harder cut.
+The loop compacts long history, keeping the session's first request and the latest one.
+Without limits from the gateway it cuts past 150 messages down to 100. Since 0.15.0, when
+the gateway reports the model's context window, the history is cut when its estimate fills
+70% of that window (down to 50%) and the message count follows the gateway's `messages_max`;
+the current ShvIA Web source announces 5,000 messages and caps the window at 128k tokens by
+default. A request the provider refuses (usually a full context) is retried once with a
+harder cut.
 Before any message leaves, old large tool outputs, and reads of files edited since, become a
 one-line note saying what the tool returned (0.15.1); this is not an immutable full transcript. Since
 0.13.8 the history also keeps the assistant's final answers (an empty one is left out), so a
 resumed session and the next request carry what the assistant already said. On Unix, the store applies `0700` to its directory and `0600`
 to files. Saves are best effort. There is no scheduled expiration or cloud sync.
+
+A session's ID is its creation time in whole seconds. `sessions resume ID` restores the
+saved messages, including the system prompt and project instructions as they were when the
+session started; it does not rebuild them for the current folder. Usage counters start at
+zero in the resumed process, and its next autosave replaces the session's saved token and
+cost totals with that process's count (`main.rs`, `salvar_sessao`).
 
 `sessions clear --older-than 30` removes files last modified over 30 days ago. Omitting
 the option removes all session JSON files; `--older-than 0` can also remove all existing
@@ -190,4 +207,7 @@ up to 400 characters of each tool result, plus session boundaries. `AI_MEMORY_TO
 optionally supplies a bearer token. HTTPS is required except for loopback HTTP; an unsafe
 memory URL disables the integration with a warning. Requests have a 1.5-second timeout,
 without retry or failure log. This exports working content to a separate service; it is
-not the local session store and does not retrieve memories into the agent prompt.
+not the local session store, and `anna` does not retrieve memories into its prompt. The
+gateway can do that on its side: the current ShvIA Web source prefixes a new turn with the
+person's own ai-memory block for on-premises targets (cloud only with the operator's
+opt-in), whether or not `AI_MEMORY_URL` is set here ([protocol](protocolo.md) §2).

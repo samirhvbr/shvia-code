@@ -3,6 +3,43 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.9 - Recheck the documentation against anna 0.15.8 and the current ShvIA Web source
+
+Documentation and version metadata only; no Rust, shell or workflow logic changes. The guides
+were last reviewed against 0.13.4 (15/10/2026), and ten versions changed the loop, the protocol
+and the tools since. Each claim below was read in source (`anna` `7b5dd3f`; ShvIA Web
+`origin/master` `b24e45a5`, ShvIA Desktop `2dcc057` and ShvIA Workspace `21128c3`, read only);
+nothing was exercised against a live gateway.
+
+- `docs/protocolo.md`: what `anna` sends (`profile_name` is the `--model` string verbatim,
+  never `server`/`model`/`tool_choice`/`temperature`); the gateway's 5,000-message door and
+  128k window cap since 02/11/2026, so the 150/100 count is the no-limits fallback; the target
+  fallback to the active Code project's pin; what the gateway adds to a request (tool-output
+  trimming and compression, loop nudge, ai-memory and skills blocks); the second `model`
+  event after a failover; the `usage` fields; `resposta_vazia` and the cut-answer path; the
+  shared `api-key-inference` rate limit; the text `anna` itself adds to tool results; and the
+  loop's step 5, whose sentence stopped mid-way.
+- `docs/embedding.md`: the hosts that spawn the engine today (Desktop and Workspace, both
+  `--json --tools local`); errors without `turn_done`; `model` per round; no `tool_result`
+  echo in host mode and how the host-result wait ends; the approval example with `id`.
+- `docs/USER-GUIDE.md`, `docs/arquitetura-cli.md`, `docs/orquestrador.md`, `docs/stats.md`,
+  `ANNA.md`, `README.md`: exit status of `-p` on gateway errors, the write guards of 0.15.4 and
+  0.15.7, compaction against the current gateway, resume keeping the old system prompt and
+  overwriting saved usage totals, the process-level test suite, the pipeline stop of 0.14.0,
+  the 6,000/9,000-character instruction budget, and server-side memory/skills injection.
+- `docs/ferramentas.md`, `SECURITY_GUIDELINES.md`: corrected against `src/tools.rs`,
+  `src/guard.rs` and `src/checkpoint.rs`.
+- `docs/DEVELOPMENT.md`: `scripts/sync-version.sh`, the repodocs Git hooks, `tools/release.sh`,
+  `scripts/dogfood.sh`, and the Windows workflow running on hosted minutes.
+- `docs/DOCUMENTATION-REVIEW-20261015.md`: a dated status of each 15/10 finding (fixed, partly
+  fixed or still open, with source locations) and the new findings of this recheck — one in
+  ShvIA Web (the Code project's pin overriding `profile_name`'s model), and in `anna` a
+  panicking byte slice in `cap()`, the API key in every shell command's environment, shell
+  classifier gaps, a restore that deletes files staged after the snapshot, Git calls without
+  exit status or timeout, and unescaped approval previews. Nothing is fixed here.
+- `.claude/README.md`: it named ShvIA Desktop and its Tauri/npm/Python stack; it now names this
+  repository, and the recommended allow-list drops that stack's entries.
+
 ## 0.15.8 - Ignore a gate decision that names another gate, so a late approval never decides the next one
 
 In NDJSON mode a gate took the next `{"decision": …}` line whatever its `id` (the documentation

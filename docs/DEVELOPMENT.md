@@ -17,6 +17,20 @@ The repository requires a versioned changelog even for documentation. Keep these
 rewriting the lockfile first. A documentation metadata bump does not change agent logic
 and does not authorize merging or publishing its release.
 
+Helpers in the repository:
+
+- `bash scripts/sync-version.sh` writes the `version.md` number into `Cargo.toml` and
+  `Cargo.lock`; `--verificar` only checks and exits 1 when a carrier diverges. It does not
+  touch `CHANGELOG.md`.
+- `tools/git-hooks/commit-msg` (subject `X.Y.Z - …` must carry the `version.md` version)
+  and `tools/git-hooks/pre-push` (checks that version against the remote) are generated
+  from repodocs. They run only when the clone points Git at them
+  (`git config core.hooksPath tools/git-hooks`); `REPODOCS_NO_HOOK=1` skips them.
+- `./tools/release.sh` tags and publishes the `version.md` version as a GitHub Release
+  (`--dry-run`, `--backfill`); the Release workflow calls it after a merge.
+- `scripts/dogfood.sh` runs a few `-p` prompts against a live gateway with a real
+  `SHVIA_API_KEY`; it is a manual smoke test, not part of CI.
+
 ## Local build and checks
 
 Rust/Cargo are required; macOS also needs Xcode Command Line Tools. Shell execution needs
@@ -31,8 +45,11 @@ cargo build --release --locked
 
 The test suite includes filesystem guards, tool classification, shell timeouts/process
 trees, checkpoints, rendering, configuration, statistics and repository documentation
-guards. The architecture module inventory and AGENTS/CLAUDE mirror are executable checks.
-Passing these tests does not prove live model tool-calling or installed UI behavior.
+guards. The architecture module inventory, the AGENTS/CLAUDE mirror and the SHA pin of
+every workflow action are executable checks. The process-level tests in `tests/` run the
+built binary against a scripted loopback gateway and are compiled only on Unix (they
+isolate `HOME`). Passing these tests does not prove live model tool-calling or installed
+UI behavior.
 
 `./build-local.sh` runs a preflight, builds release by default and writes a SHA-256 next
 to the executable. `--debug` selects a debug build. `--audit` runs `cargo audit` when
@@ -47,7 +64,7 @@ binary directory; it modifies the installed executable and is not a read-only ch
 | Workflow | Trigger and output |
 |---|---|
 | `test.yml` | PRs, default-branch pushes, manual dispatch; Linux locked tests, clippy and RustSec advisory check |
-| `build-windows.yml` | Matching source/version/workflow pushes to master or dispatch; tests/clippy, MSVC release build and `anna-windows-x86_64` Actions artifact with checksum |
+| `build-windows.yml` | Matching source/version/workflow pushes to master or dispatch; tests/clippy, MSVC release build and `anna-windows-x86_64` Actions artifact with checksum. Runs on GitHub-hosted `windows-latest`, not on `CI_RUNNER`, so it spends hosted minutes |
 | `release.yml` | Default-branch push changing `version.md` or manual dispatch; calls `tools/release.sh` to publish the bare version tag/Release |
 | `linux-binary.yml` | Successful completion of the Release workflow on master, or dispatch; builds static Linux x86_64 binary and attaches it and SHA-256 to the existing Release |
 

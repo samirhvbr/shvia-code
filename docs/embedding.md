@@ -4,11 +4,20 @@ Como uma casca externa (a aba **Agente do SShvTerm**, uma extensão de editor, u
 job de CI) dirige o motor do `anna` sem falar ANSI. O mesmo loop que move o
 terminal move o host — via um `Frontend` que fala **NDJSON** (`src/json.rs`).
 
-> **Current lifecycle notes (2026-10-15):** JSON modes do not use REPL session autosave.
-> `--json -p` can still request write approval from stdin; terminal `-p` refusal is not
-> a restriction on this frontend. Pending gates/results have no application timeout.
-> Hosts must handle `error` and process closure: some error paths do not emit `turn_done`.
-> Model, usage and event fields below are the engine contract, not proof of a deployed host.
+> **Current lifecycle notes (rechecked against 0.15.8 on 2026-11-05):** JSON modes do not
+> use REPL session autosave. `--json -p` can still request write approval from stdin;
+> terminal `-p` refusal is not a restriction on this frontend. Pending gates/results have
+> no application timeout. Hosts must handle `error` and process closure: a gateway error
+> (`error` in the stream or before it) and a transport failure emit `error` **without**
+> `usage`/`turn_done` (`agent::run_turn`, `main::run_json_turn`). Model, usage and event
+> fields below are the engine contract, not proof of a deployed host.
+>
+> **Hosts in the SHVIA repositories (source, 2026-11-05):** the Desktop's Code mode
+> (`SHVIA-DESKTOP` `src-tauri/src/code_bridge/sessao.rs`) and the Workspace
+> (`SHVIA-WORKSPACE` `services/api/src/codeSessions.ts`) both spawn
+> `anna --json --tools local [--model …] [--effort …] [--url …]` with `SHVIA_API_KEY` in
+> the child's environment and the project as working directory. Neither uses
+> `--tools host`; the SShvTerm Agent tab named below was not checked.
 
 ## Como subir
 
@@ -44,10 +53,10 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 
 | Evento | Payload | Significado |
 |--------|---------|-------------|
-| `model` | `model`, `server` | modelo/infra escolhidos no turno |
+| `model` | `model`, `server` | model and server label of each gateway request (one per round, and again after a gateway failover); `server` is the gateway's `server_label` |
 | `text` | `delta` | pedaço da resposta (streaming) |
 | `tool_call` | `id`, `name`, `arguments` | a Anna vai usar uma ferramenta |
-| `tool_result` | `id`, `name`, `bytes`, `content` | resultado da ferramenta (já executada) |
+| `tool_result` | `id`, `name`, `bytes`, `content` | resultado da ferramenta (já executada) — local runner only; with `--tools host` the engine does not echo the result the host returned. `content` is what the model receives, including the notes `anna` appends (stall guard, subfolder instructions) |
 | `gate_request` | `id`, `scope`, `policy`, `preview` | **pede aprovação** — o motor BLOQUEIA até a decisão (`id` = o `tool_call.id`, casa com o `tool_result`) |
 | `usage` | `tokens`, `cost`, `estimated` | cumulative telemetry since this process started, not a per-turn delta |
 | `turn_done` | — | turno terminou; pode mandar o próximo `user` |
@@ -97,11 +106,13 @@ anna → {"type":"gate_request","id":"call_1","scope":"edit_file","policy":"conf
         "preview":{"kind":"diff","path":"src/x.rs","diff":"  ✎ src/x.rs\n  - a\n  + b\n"}}
         (BLOQUEIA)
 host → (renderiza o diff, mostra Aprovar/Negar)
-host → {"decision":"approve"}
-anna → {"type":"tool_result","name":"edit_file","content":"ok — src/x.rs editado..."}
+host → {"id":"call_1","decision":"approve"}
+anna → {"type":"tool_result","id":"call_1","name":"edit_file","bytes":43,"content":"ok — src/x.rs editado (1 ocorrência(s))."}
 ```
 
-Se o stdin fechar com um `gate_request` pendente, o motor **nega** (seguro).
+Se o stdin fechar com um `gate_request` pendente, o motor **nega** (seguro). A
+`{"type":"exit"}` or a `cancel` while a gate waits also refuses it. Lines without a
+`decision` are ignored while the gate waits.
 
 ### The stop handshake (`stop_request`) — optional, per engine
 
@@ -178,6 +189,11 @@ Quem roda as ferramentas:
 
   Neste modo **não há `gate_request`** — quem aprova é o host. É o **Modelo B** do
   ADR-002, feito pra aba Agente do SShvTerm (que já tem política + exec no host).
+  The host mode also uses its own system prompt (propose one shell command at a time,
+  never execute). The wait for the host's result matches the `tool_result` `id` when both
+  sides have one, ignores every other line, and has no timeout; stdin closing returns
+  `ERRO: host fechou o stdin sem devolver o resultado.` to the model, and a `cancel`
+  returns a `RECUSADO` result. The planning pipeline does not run in this mode.
 
 ## Segurança
 

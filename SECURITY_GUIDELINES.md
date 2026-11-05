@@ -1,7 +1,8 @@
 # ShvIA Code security guidelines
 
-> Reviewed against the CLI source on 2026-10-15. This document separates implemented
-> controls from required server behavior and known gaps. It does not certify live
+> Reviewed against the CLI source on 2026-10-15 and rechecked against 0.15.8 on
+> 2026-11-05. This document separates implemented controls from required server behavior
+> and known gaps. It does not certify live
 > gateway policy, Windows ACLs, a packaged host, or an operating-system sandbox.
 
 ## 1. Threat model
@@ -15,7 +16,10 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
 
 1. **Approval (A1, A3).** File writes show a diff and require confirmation. Shell commands
    use an automatic allowlist, confirmation for other commands, and always-confirm for
-   classified destructive commands. Session approval is per tool scope. Terminal `-p`
+   classified destructive commands. Session approval (`t`) is per tool name: on a `bash`
+   card it covers every later confirm-class shell command until `anna` exits, not only the
+   command shown. The destructive classifier misses some spellings, which then fall to
+   confirm and so under `t` ([tools](docs/ferramentas.md#bash--gate-auto-p-allowlist--confirm-p-resto--always-p-destrutivo)). Terminal `-p`
    refuses confirmation gates, but automatic builds/tests can run project code and have
    side effects. JSON one-shot can still request/receive host approval. There is no yolo
    flag. These are classification/approval controls, not a sandbox or a guarantee that
@@ -23,8 +27,11 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
 2. **Untrusted content (A1).** Tool output is conversation data, not permission to relax
    gates. Architectural/reviewer roles filter write/shell tools in code. Models can still
    follow malicious instructions in files; inspect proposed changes and commands. A write to
-   an instruction file (`ANNA.md`, `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`) always asks,
-   session approval or not (0.15.4): it would persist into every later session's prompt.
+   an instruction file (`ANNA.md`, `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`) through
+   `edit_file` or `write_file` always asks, session approval or not (0.15.4): it would
+   persist into every later session's prompt. A shell command that writes such a file is
+   classified like any other command, and some allowlisted commands with an output option
+   write files while automatic.
 3. **File paths and secrets (A2).** `read_file`, `grep`, `edit_file` and `write_file` check
    the requested path **and** the real file after every symlink against `guard::denied`;
    canonical path helpers constrain filesystem tools to the project, and a write to a name
@@ -36,8 +43,12 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
    `glob` show the names (not the contents) of denied files; recursive search in `bash`
    (`grep -r X .`, `rg X`) stays automatic and can print a line from a denied file; and an
    unquoted glob in a content-printing `bash` command asks, because the shell expands it
-   after the argument check. Do not treat ignore rules or filename filters as secret containment.
-   An approved shell command has the user's filesystem/network access.
+   after the argument check. The shell argument check is lexical and has further gaps,
+   measured on 2026-11-05: backslash escapes, a path glued to an option, symlinks, `cd`
+   to home or back, `.ssh/`/`.aws/` at the start of a relative path, private keys not named
+   `id_rsa*`, Git object paths (`git show REV:path`), and allowlisted commands that print the
+   environment (which carries `SHVIA_API_KEY`). Do not treat ignore rules or filename filters
+   as secret containment. An approved shell command has the user's filesystem/network access.
 4. **API key (A4).** Runtime authentication comes from nonempty `SHVIA_API_KEY` or
    `api_key` in the OS configuration directory; `anna config` reports the path and key
    presence without printing the key. Use `anna config set-key` through stdin. Its
@@ -66,7 +77,8 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
    the same cycle of up to four calls) repeat five times; only the interactive terminal may
    let it go on. `bash_timeout`/`SHVIA_BASH_TIMEOUT` defaults to 120 seconds,
    with process-tree termination; 0 disables it. It applies to the shell tool, not every
-   subprocess (pipeline verification uses another path). File/search/output limits vary
+   subprocess: the Git tools, checkpoint Git calls and pipeline verification use
+   `Command::output()`, with no timeout and no reaction to a stop. File/search/output limits vary
    by tool and are not a global memory ceiling. HTTP streams and stdin approval/result
    waits have no explicit overall application timeout; since 0.14.0 the person can stop
    them (terminal Ctrl-C, host `cancel`), which also kills a running shell command's
@@ -82,9 +94,11 @@ not mask arbitrary tool results before sending them, nor guarantee that all code
 are PII covered by a gateway masker.
 
 `--json --tools host` delegates shell execution and approval to its host; the CLI's local
-file guards are not a remote-host policy. Local NDJSON approval currently consumes the
-next decision without enforcing its correlation ID, so hosts must serialize pending
-requests. EOF refuses a local gate, but a host that leaves stdin open can leave it waiting.
+file guards are not a remote-host policy. Since 0.15.8 local NDJSON approval ignores a
+decision whose `id` names another gate (with a `warn`); a decision without `id` is still
+accepted for older hosts, so hosts should send the `id`. EOF, `exit` and `cancel` (0.14.0)
+refuse a waiting local gate, but a host that leaves stdin open without answering can leave
+it waiting.
 See [embedding](docs/embedding.md) and the [review](docs/DOCUMENTATION-REVIEW-20261015.md).
 
 ## 4. Supply chain and build (A7)

@@ -57,24 +57,27 @@ pub struct TurnResult {
 /// default) and every round of a turn is one request, while reads run without approval. A
 /// fast turn goes over the limit, and until 0.13.10 the 429 ended the turn with an error and
 /// the work stopped mid-way. `tentativa` counts retries already made (0 on the first failure).
+///
+/// The gateway's `Retry-After` is a floor raised to the backoff, never a wait shorter than it.
+/// Laravel's throttle answers `Retry-After: 0` in the last second of its window, and until
+/// 0.15.10 that was taken as given: the four retries went out in the same second, all four came
+/// back 429, and the turn ended (measured 05/11/2026, two agents on one account).
 pub fn nova_tentativa(r: &TurnResult, tentativa: u32) -> Option<Duration> {
     if !r.retentavel || tentativa >= MAX_TENTATIVAS {
         return None;
     }
-    match r.retry_after {
-        Some(espera) if espera > RETRY_AFTER_MAX => None,
-        Some(espera) => Some(espera),
-        None => {
-            let base = BACKOFF_BASE.saturating_mul(1 << tentativa.min(8)).min(BACKOFF_MAX);
-            // Jitter without a random-number crate: the clock's sub-second nanoseconds are
-            // enough to keep two processes from retrying in the same instant.
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(0);
-            Some(base + base.mul_f64(0.2 * f64::from(nanos % 1000) / 1000.0))
-        }
+    if r.retry_after.is_some_and(|espera| espera > RETRY_AFTER_MAX) {
+        return None;
     }
+    let base = BACKOFF_BASE.saturating_mul(1 << tentativa.min(8)).min(BACKOFF_MAX);
+    // Jitter without a random-number crate: the clock's sub-second nanoseconds are
+    // enough to keep two processes from retrying in the same instant.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let recuo = base + base.mul_f64(0.2 * f64::from(nanos % 1000) / 1000.0);
+    Some(r.retry_after.map_or(recuo, |espera| espera.max(recuo)))
 }
 
 /// Statuses that clear by themselves: rate limit, request timeout, and the gateway or its
@@ -157,7 +160,11 @@ pub async fn code_chat(
                 "proibido (403): {}",
                 body_detail.unwrap_or_else(|| "sua conta não tem permissão de API (can_use_api) — fale com um admin.".into())
             ),
-            429 => "limite atingido (429): 20 requisições/min por chave — espere um instante.".to_string(),
+            // The throttle counts per ACCOUNT, every agent of it together (Laravel keys it by user id),
+            // not per key: two agents open at once share it.
+            429 => "limite atingido (429): pedidos por minuto da sua conta no gateway (20 por padrão), \
+                    somando todos os agentes abertos — espere um instante."
+                .to_string(),
             _ => body_detail.unwrap_or_else(|| format!("HTTP {status}")),
         };
         return Ok(TurnResult { error: Some(detail), retentavel, retry_after: espera, ..Default::default() });
@@ -234,8 +241,14 @@ mod tests {
             retry_after: segundos.map(Duration::from_secs),
             ..Default::default()
         };
-        // The gateway's Retry-After is what the throttle needs, so it is used as given.
+        // A Retry-After longer than the backoff is what the throttle needs, so it is used as given.
         assert_eq!(nova_tentativa(&falha(true, Some(7)), 0), Some(Duration::from_secs(7)));
+        // A shorter one (Laravel sends 0 in the window's last second) is raised to the backoff:
+        // four retries in the same second all come back 429 and end the turn.
+        let zero = nova_tentativa(&falha(true, Some(0)), 0).unwrap();
+        let zero_terceira = nova_tentativa(&falha(true, Some(0)), 2).unwrap();
+        assert!(zero >= Duration::from_secs(2) && zero < Duration::from_secs(3), "{zero:?}");
+        assert!(zero_terceira >= Duration::from_secs(8), "{zero_terceira:?}");
         // 401/403/422 and SSE errors: the same request fails the same way again.
         assert_eq!(nova_tentativa(&falha(false, Some(7)), 0), None);
         // A wait longer than the ceiling is reported, not sat through in silence.

@@ -3,6 +3,23 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.10 - Wait at least the backoff when the gateway's Retry-After is shorter
+
+A rate-limited round now waits the 2, 4, 8, 16 s backoff (with jitter) or the gateway's
+`Retry-After`, whichever is longer. Until now a `Retry-After` was taken as given, and Laravel's
+throttle answers `Retry-After: 0` in the last second of its window: on 05/11/2026, with two
+agents running on one account in ShvIA Desktop, the four retries went out in the same second,
+all four came back 429, and the Run stopped at its first iteration ("nova tentativa em 0 s
+(4 de 4)").
+
+- `src/api.rs`: `nova_tentativa` raises a shorter `Retry-After` to the backoff; a longer one is
+  still waited as given, and one above 120 s still ends the turn. The unit test covers `0`.
+- The 429 message no longer says "20 requisições/min por chave": the gateway counts per
+  account (Laravel keys the throttle by user id), every open agent together, so two agents
+  share it.
+- `docs/protocolo.md`, `docs/arquitetura-cli.md`: the retry wait as it is now.
+- `tests/gateway_resilience.rs`: the comment of the 429 test (the retry now waits about 2 s).
+
 ## 0.15.9 - Recheck the documentation against anna 0.15.8 and the current ShvIA Web source
 
 Documentation and version metadata only; no Rust, shell or workflow logic changes. The guides

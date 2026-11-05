@@ -20,8 +20,9 @@ fn saved_session(home: &Home) -> Value {
 #[test]
 fn a_rate_limited_round_is_retried_after_the_gateways_retry_after() {
     let home = Home::new();
-    // The per-key throttle answers 429 with Retry-After (0 here, to keep the test fast);
-    // the retry must reach the gateway again and finish the turn.
+    // The per-account throttle answers 429 with Retry-After. 0 is what Laravel sends in the
+    // window's last second; since 0.15.10 it is raised to the 2-second backoff, so the retry
+    // reaches the gateway again after the window turned, and finishes the turn.
     let (url, server) = gateway(vec![
         Reply::Status {
             code: 429,

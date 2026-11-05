@@ -1,6 +1,6 @@
 # `anna stats` — dashboard de uso (Wrapped)
 
-> **Current scope (2026-10-15):** this dashboard reads retained REPL session data, not
+> **Current scope (2026-10-15, rechecked 2026-11-05):** this dashboard reads retained REPL session data, not
 > every engine call. One-shot and NDJSON modes have no local session autosave, and
 > pipeline activity does not create an equivalent complete dashboard record. Message
 > history is compacted; per-session model metadata is not per-message accounting.
@@ -43,7 +43,9 @@ Cada sessão passou a gravar, no autosave, três campos novos (retrocompatíveis
 
 - `tokens` and `cost` — the in-memory telemetry accumulator at autosave time, not a
   per-turn delta. The accumulator starts fresh in a resumed process; saved totals are
-  not loaded into it, as recorded in the [fidelity findings](DOCUMENTATION-REVIEW-20261015.md).
+  not loaded into it, so the resumed process's first autosave **replaces** them with its
+  own count (`main.rs`, `salvar_sessao`). A resumed session therefore under-reports what it
+  cost overall. See the [fidelity findings](DOCUMENTATION-REVIEW-20261015.md#status-on-2026-11-05).
 - `model` — o `model` do evento SSE do gateway (cai pro perfil escolhido se o
   gateway não informar).
 

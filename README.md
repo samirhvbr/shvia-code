@@ -93,8 +93,9 @@ execution result; the host owns approval and execution policy.
 [Embedding](docs/embedding.md) documents events, decisions, images, and lifecycle.
 
 ShvIA Desktop can package the engine, and ShvIA Workspace can install the static Linux
-binary in a runner. Their routing, installation, UI, and remote execution live in their
-own repositories. Optional `AI_MEMORY_URL` enables a separate best-effort hook that
+binary in a runner; in their current source both spawn `anna --json --tools local` with
+the key in `SHVIA_API_KEY`. Their routing, installation, UI, and remote execution live in
+their own repositories. Optional `AI_MEMORY_URL` enables a separate best-effort hook that
 sends prompts and tool information to an ai-memory service; it is disabled when unset.
 
 ## Contribute

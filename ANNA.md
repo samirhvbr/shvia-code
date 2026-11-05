@@ -1,8 +1,9 @@
 # ANNA.md — project context for the coding agent
 
 This is the root instruction file selected by `anna` before CLAUDE.md/AGENTS.md.
-Keep it short: up to 6,000 characters become project context. Follow
-[AGENTS.md](AGENTS.md) for full repository rules.
+Keep it short: up to 6,000 characters of each selected file, and 9,000 in all, become
+project context, resent on every round. Follow [AGENTS.md](AGENTS.md) for full
+repository rules.
 
 ## Product
 

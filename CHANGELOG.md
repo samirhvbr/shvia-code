@@ -3,6 +3,21 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.15.11 - Require confirmation for shell escapes outside single quotes
+
+The automatic shell gate now asks before running a command with a backslash outside
+single quotes. Its token checks do not interpret shell escapes: `cat .e\nv` passed
+the secrets check, then `sh` removed the backslash and opened `.env`. Rejecting that
+syntax from Auto closes the mismatch without trying to reproduce the shell parser.
+Double-quoted escapes, ANSI-C quoting (`$'...'`), escaped spaces and line continuations also ask; backslashes
+inside single-quoted literals and ordinary read-only command chains remain automatic.
+
+- `src/tools.rs`: reject shell escapes in the existing quote-aware command scanner;
+  regressions cover sensitive paths, quote escapes, continuations and harmless controls.
+- `docs/ferramentas.md`: describe the confirmation rule and remove the closed escape caveat.
+- The regression fails on the unchanged parent with `cat .e\nv`; all 44 tool tests pass
+  after the guard is applied.
+
 ## 0.15.10 - Wait at least the backoff when the gateway's Retry-After is shorter
 
 A rate-limited round now waits the 2, 4, 8, 16 s backoff (with jitter) or the gateway's

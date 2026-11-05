@@ -1093,6 +1093,12 @@ fn dividir_por_and(cmd: &str) -> Option<Vec<String>> {
     let mut it = cmd.chars().peekable();
 
     while let Some(ch) = it.next() {
+        // The token checks do not interpret shell escapes: `.e\nv` becomes `.env` only
+        // when sh runs it. Ask rather than approve a different argument automatically.
+        // A backslash inside plain single quotes is literal; $'...' instead decodes escapes.
+        if aspa != Some('\'') && (ch == '\\' || (ch == '$' && it.peek() == Some(&'\''))) {
+            return None;
+        }
         // Substituição de comando expande em tudo que não seja aspa simples.
         if aspa != Some('\'') && (ch == '`' || (ch == '$' && it.peek() == Some(&'('))) {
             return None;
@@ -1889,6 +1895,36 @@ mod tests {
             "grep -n 'a?b' README.md",
             "git ls-files '*.rs'",
         ] {
+            assert_eq!(classify(cmd), Policy::Auto, "should not ask: {cmd}");
+        }
+    }
+
+    #[test]
+    fn shell_escapes_require_confirmation() {
+        for cmd in [
+            r"cat .e\nv",
+            r"cat certs/server.p\em",
+            r"cat $'.\x65nv'",
+            "cat .e\\\nnv",
+            r#"cat .e\"n\"v"#,
+            r#"cat "notes\ old.txt""#,
+            r"cd notes\ old && cat README.md",
+        ] {
+            assert!(!is_simple_allowlisted(cmd), "the policy does not normalize this syntax: {cmd}");
+            assert_eq!(classify(cmd), Policy::Confirm, "should ask: {cmd}");
+        }
+    }
+
+    #[test]
+    fn single_quoted_backslashes_and_plain_reads_stay_automatic() {
+        for cmd in [
+            r"grep '\d+\s' src/main.rs",
+            r"echo '\$HOME'",
+            r"cat 'notes\old.txt'",
+            "cat src/main.rs",
+            "cd app && git status && cat README.md",
+        ] {
+            assert!(is_simple_allowlisted(cmd), "the shell leaves this argument literal: {cmd}");
             assert_eq!(classify(cmd), Policy::Auto, "should not ask: {cmd}");
         }
     }

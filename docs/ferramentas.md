@@ -164,11 +164,17 @@ the destructive menu for these cards, so it reads *Sim, executar*.
   `/.aws/`, `.git/`); é caminho **absoluto** ou de **home** (`~/…`); tem `..` que **escapa**
   da raiz; ou traz **expansão de variável** (`$HOME/x`). Aspas não ajudam — a conferência é
   por token, não pela string crua. **Its limits, measured on 2026-11-05:** the check is
-  lexical — it does not resolve symlinks and does not undo backslash escapes (a name spelled
-  with a backslash passes); it skips every token that starts with `-`, so a path glued to an
-  option (`--from-file=…`) is not checked; `.ssh/` and `.aws/` are matched only after a `/`,
+  lexical — it does not resolve symlinks; it skips every token that starts with `-`, so a
+  path glued to an option (`--from-file=…`) is not checked; `.ssh/` and `.aws/` are matched only after a `/`,
   and private keys by name only as `id_rsa*`; and `cd` with no argument (home) or `cd -`
   leaves the project for the rest of the `&&` chain.
+- **Shell escapes require confirmation (0.15.11).** A backslash outside single quotes sends
+  the whole command to **confirm**, including inside double quotes and in `&&` chains.
+  ANSI-C quoted arguments (`$'...'`) also ask: their backslashes are decoded by the shell.
+  The token checks do not interpret shell escapes, so `cat .e\nv` previously passed as
+  a harmless name before `sh` removed the backslash and opened `.env`. Rather than approve
+  an argument the shell will change, the scanner asks. This also asks for harmless escaped
+  spaces; single-quoted literal patterns such as `grep '\d+\s' src/main.rs` remain auto.
 - **Comandos que a lista deixava passar pelo nome e escrevem/executam pelo argumento**
   (F-03): `awk` **saiu do auto** (`system("…")` e `print > "arq"` moram dentro do programa,
   entre aspas, invisíveis ao scanner — mesmo critério que já mantinha o `sed` fora);

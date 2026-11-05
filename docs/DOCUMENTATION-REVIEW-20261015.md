@@ -31,6 +31,27 @@ New since 2026-10-15, found while rechecking the gateway contract (ShvIA Web
 - A read timeout that cuts an answer reaches `anna` as `error` followed by `done` with the
   partial text; `anna` reports the error and drops that text from the history.
 
+Found in `anna` itself while rechecking the tool catalog (source read; the classifier cases
+were measured by running the classification code of `src/tools.rs` in a harness):
+
+- `cap()` in `src/tools.rs` slices a `String` at a byte offset (`&s[..max]`), which panics
+  when the cut falls inside a multibyte character. It is reached by shell and Git output over
+  32 KiB and by the checkpoint label of a destructive command over 60 bytes; nothing catches
+  the panic, so `anna` (or the NDJSON sidecar) exits.
+- The shell tool's child inherits the whole environment, `SHVIA_API_KEY` included; any
+  command that prints the environment, or project code run by an automatic build/test, can
+  read the key.
+- The shell classifier gaps listed in [the tool catalog](ferramentas.md) (allowlisted
+  commands with output options, lexical argument checks, prefix options read as taking a
+  value, substring pipe-to-shell rule).
+- `/rollback aplicar` deletes files staged after the snapshot (`git restore` without
+  overlay), while its note says new files remain.
+- The Git wrappers ignore Git's exit status and, like checkpoint Git calls, have no
+  timeout; a commit hook can hang an NDJSON session.
+- Approval previews print model-supplied text without stripping control characters, so a
+  carriage return or an escape sequence in the arguments can change what the card shows
+  (code path read; the effect on a given terminal is not measured).
+
 ## Scope and evidence
 
 This review began from `origin/master` at `b872d8cac1797f6352c488dae44c919e69f056b1`

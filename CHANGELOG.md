@@ -32,7 +32,11 @@ nothing was exercised against a live gateway.
 - `docs/DEVELOPMENT.md`: `scripts/sync-version.sh`, the repodocs Git hooks, `tools/release.sh`,
   `scripts/dogfood.sh`, and the Windows workflow running on hosted minutes.
 - `docs/DOCUMENTATION-REVIEW-20261015.md`: a dated status of each 15/10 finding (fixed, partly
-  fixed or still open, with source locations) and two new ones, one of them in ShvIA Web.
+  fixed or still open, with source locations) and the new findings of this recheck — one in
+  ShvIA Web (the Code project's pin overriding `profile_name`'s model), and in `anna` a
+  panicking byte slice in `cap()`, the API key in every shell command's environment, shell
+  classifier gaps, a restore that deletes files staged after the snapshot, Git calls without
+  exit status or timeout, and unescaped approval previews. Nothing is fixed here.
 - `.claude/README.md`: it named ShvIA Desktop and its Tauri/npm/Python stack; it now names this
   repository, and the recommended allow-list drops that stack's entries.
 

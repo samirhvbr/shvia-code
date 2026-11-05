@@ -234,8 +234,10 @@ quanto o **evento `error` no meio do stream**. Nunca ecoar a API key em log.
 
 **Retries (0.13.10+).** A round that fails before the stream opens with 429, 408, 502,
 503 or 504, or that never connected, is sent again up to 4 times: the CLI waits the
-`Retry-After` seconds when the gateway sends them (the per-key throttle does), otherwise a
-2, 4, 8, 16 s backoff (capped at 30 s) with jitter, and shows a `warn` each time. A
+2, 4, 8, 16 s backoff (capped at 30 s) with jitter, or the gateway's `Retry-After` when that is
+longer (the per-account throttle sends it with every 429), and shows a `warn` each time. A
+shorter `Retry-After` is raised to the backoff (0.15.10): Laravel answers `Retry-After: 0` in the
+last second of its window, and taking it as given sent all four retries in the same second. A
 `Retry-After` above 120 s ends the turn with the error instead. Not retried: 400/401/403/422,
 500 (a gateway defect), an SSE `error` event (the gateway already ran its own failover),
 and a connection that broke after the request was sent, which may already have started a

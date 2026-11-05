@@ -1,5 +1,36 @@
 # Documentation review — 2026-10-15
 
+## Status on 2026-11-05
+
+The record below is kept as written on 2026-10-15. This section, added on 2026-11-05,
+says what happened to its findings by `anna` 0.15.8 (`origin/master` `7b5dd3f`), read in
+source; nothing here was reproduced against a live gateway. The guides were rechecked
+against the same source in 0.15.9.
+
+| 2026-10-15 finding | Status in 0.15.8 | Where |
+|---|---|---|
+| Secret filtering differs across tools/canonical targets | **Mostly fixed in 0.13.9**: `grep` applies the denylist to an explicit path and to each walked file by its real path; `read_file`/`edit_file`/`write_file` check the requested name and the resolved target. Still open by decision: `list_dir`/`glob` list denied names, and recursive search through `bash` (`grep -r`, `rg`) stays automatic | `src/tools.rs` `grep`, `read_file`; `src/guard.rs` |
+| Sensitive temporary/session files written before permission hardening | **Open** | `src/config.rs` `gravar_api_key` (write, then `0600`); `src/session.rs` `Store::save` (write, then `0600`) |
+| Commit refusal can leave files staged | **Open**: `add_all` runs `git add -A` before the approval | `src/tools.rs` `git_commit` |
+| Error status/completion can mislead scripts or leave hosts waiting | **Open**: a gateway error emits `error` and returns without `usage`/`turn_done`; terminal `-p` exits 0 on it; a transport error reaches `run_json_turn` as `error` only | `src/agent.rs` `run_turn` (`if let Some(err) = result.error`); `src/main.rs` `run_json_turn` |
+| Session resume is not bound to a project | **Open**; the resumed session also keeps the system prompt of the folder it started in | `src/main.rs` resume branch; `src/session.rs` `Session` |
+| Session fidelity/identity and resumed usage | **Final answers fixed in 0.13.8.** Still open: IDs are creation time in whole seconds (two sessions started in the same second share a file), and a resumed process's first autosave replaces the saved token/cost totals with its own count | `src/agent.rs` `registrar_resposta`; `src/session.rs` `Session::new`; `src/main.rs` `salvar_sessao` |
+| Pipeline verification can skip checks or wait indefinitely | **Open**: verification still calls `Command::output()` outside the shell timeout, and no model turn is running then, so the 0.14.0 turn stop does not apply to it | `src/orquestrador.rs` `falha_verificacao` |
+| NDJSON local approvals do not enforce request ID | **Fixed in 0.15.8** for decisions that carry an `id` (another gate's decision is ignored with a `warn`); a decision without `id` is still accepted for older hosts. Pending gates still have no timeout | `src/json.rs` `approve` |
+| Smaller limitations (branch label in linked worktrees, `--tools host` without `--json`, legacy checkpoint fallback) | **Unchanged** | `src/project.rs` `current_branch`; `src/main.rs` `host_mode`; `src/checkpoint.rs` `restore` |
+
+New since 2026-10-15, found while rechecking the gateway contract (ShvIA Web
+`origin/master` `b24e45a5`, read only):
+
+- **ShvIA Web, not this repository:** `CodeChatController::stream` passes the active Code
+  project's `model_pin` as `requestModel` whenever the request has no `model` field, even
+  when it names `profile_name`. `anna` always sends `profile_name` and never `model`, so a
+  person with a pinned Code project who runs `anna --model X@srv` would get the pin's model
+  on `srv`. Read from source, not exercised; the ShvIA Web test of "explicit request beats
+  the pin" covers `model`, not `profile_name`.
+- A read timeout that cuts an answer reaches `anna` as `error` followed by `done` with the
+  partial text; `anna` reports the error and drops that text from the history.
+
 ## Scope and evidence
 
 This review began from `origin/master` at `b872d8cac1797f6352c488dae44c919e69f056b1`

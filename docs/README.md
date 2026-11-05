@@ -15,7 +15,7 @@ become an implementation claim.
 | [Statistics](stats.md) | Local dashboard, source data, aggregation and historical-data limitations |
 | [Development and distribution](DEVELOPMENT.md) | Build, tests, version carriers, CI, release assets and acceptance boundaries |
 | [Security](../SECURITY_GUIDELINES.md) | Implemented controls, threat model, server boundary and known limitations |
-| [Review of 2026-10-15](DOCUMENTATION-REVIEW-20261015.md) | Source coverage, documentation corrections and code findings for a later decision |
+| [Review of 2026-10-15](DOCUMENTATION-REVIEW-20261015.md) | Source coverage, documentation corrections and code findings for a later decision, with their status on 2026-11-05 |
 | [Decisions](decisoes.md) | Dated ADRs; preserve historical rationale and read current status with the architecture |
 
 [ANNA.md](../ANNA.md) is the short project context the executable loads before

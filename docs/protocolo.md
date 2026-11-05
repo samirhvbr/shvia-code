@@ -1,13 +1,19 @@
 # Protocolo do gateway — `POST /api/v1/code/chat`
 
-> **Source review, 2026-10-26:** this describes the CLI request/SSE contract,
-> checked against ShvIA Web `956c134f` (2.114.86). It is not a current deployment
-> attestation. Client serialization lives in [`types.rs`](../src/types.rs) and
+> **Source review, 2026-11-05:** this describes the CLI request/SSE contract of `anna`
+> 0.15.8, checked against ShvIA Web `origin/master` `b24e45a5` (2.114.133). It is a
+> source comparison, not a deployment attestation: which ShvIA Web version serves
+> `ai.shvia.org` was not checked. Client serialization lives in [`types.rs`](../src/types.rs) and
 > [`api.rs`](../src/api.rs); server validation lives in
-> [CodeChatController](https://github.com/samirhvbr/shvia-web/blob/956c134f/app/Http/Controllers/Api/CodeChatController.php).
-> The client sends `X-API-Key`, `messages`, `tools`, optional `profile_name` and
-> `effort`. Other request alternatives below describe the wider gateway API,
-> not CLI flags. Conversation is resent for inference even when session files stay local.
+> [CodeChatController](https://github.com/samirhvbr/shvia-web/blob/b24e45a5/app/Http/Controllers/Api/CodeChatController.php).
+>
+> **What `anna` actually sends:** the `X-API-Key` header and a body with `messages`,
+> `tools` (left out when empty), `profile_name` and `effort` (each left out when unset).
+> `profile_name` is the `--model` / `SHVIA_PROFILE` / `profile` string, sent verbatim —
+> normally `model@server` (the gateway also parses `model#server`); `anna` never splits
+> it into `server`/`model`. `anna` never sends `server`, `model`, `tool_choice` or
+> `temperature`; those request fields below belong to the wider gateway API, not to
+> CLI flags. Conversation is resent for inference even when session files stay local.
 
 ---
 
@@ -21,16 +27,23 @@ X-API-Key: <chave do ShvIA>                # ou Authorization: Bearer <token>
 ```
 
 - **HTTPS is required**, except HTTP on loopback for local development (SECURITY §2.6).
-  The rate limit uses `SHVIA_API_KEY_RATE_LIMIT`, default 20 requests/minute.
-- Scoped bearer tokens require the `code:chat` ability; the CLI sends its configured key using `X-API-Key`.
+  The rate limit uses `SHVIA_API_KEY_RATE_LIMIT`, default 20 requests/minute, under the
+  named limiter `api-key-inference`, which the gateway also applies to
+  `POST /api/v1/agent/chat`: both routes count against the same per-user budget. Every
+  round of a turn is one request.
+- Scoped bearer tokens require the `code:chat` ability (`token.ability:code:chat`, 403
+  otherwise); the CLI sends its configured key using `X-API-Key`. The route's own comment
+  says the panel token (`*`) and the long user API key pass, and a token delegated for
+  another purpose (`workspace-inference`) is refused there.
 - Resposta de sucesso: `200` + `text/event-stream` (SSE). Headers úteis:
-  `X-Inference-Server`, `X-Inference-Model`, `X-Inference-Request-Id`.
+  `X-Inference-Server`, `X-Inference-Model`, `X-Inference-Request-Id`,
+  `X-Token-Saver-Saved-Chars`. `anna` reads none of them; it reads the `model` event.
 
 ## 2. Corpo da requisição (JSON)
 
 ```jsonc
 {
-  "messages": [                     // obrigatório, 1..200
+  "messages": [                     // required; 1..5000 on this door since 02/11/2026 (1..200 before)
     { "role": "system",    "content": "..." },
     { "role": "user",      "content": "...", "images": ["<base64 puro>"] },
     { "role": "assistant", "content": "...", "tool_calls": [{"id":"call_1","name":"read_file","arguments":{"path":"README.md"}}] },
@@ -39,10 +52,10 @@ X-API-Key: <chave do ShvIA>                # ou Authorization: Bearer <token>
   "tools": [                        // opcional, 0..32 — defs no formato JSON Schema
     { "name": "read_file", "description": "Read a file", "parameters": { "type":"object", "properties":{"path":{"type":"string"}}, "required":["path"] } }
   ],
-  "tool_choice": "auto",            // opcional: auto|none|required|<nome-da-tool>
-  "profile_name": "model@server",   // opcional — perfil explícito; senão o default do usuário
-  "server": "shvia1",               // opcional (alternativa a profile_name)
-  "model":  "qwen-coder",           // opcional
+  "tool_choice": "auto",            // optional gateway field: auto|none|required|<tool name>; not sent by anna
+  "profile_name": "model@server",   // optional — what anna sends (verbatim --model); see "Target" below
+  "server": "shvia1",               // optional gateway field; not sent by anna
+  "model":  "qwen-coder",           // optional gateway field; not sent by anna
   "effort": "medium",               // opcional: low|medium|high|xhigh|max
   "temperature": 0.2                // optional gateway field: 0..2; not sent by anna
 }
@@ -57,15 +70,30 @@ Validation failures return 422, with one exception: oversized `role:tool` conten
 trimmed, with an omission marker, before field validation. Non-tool content above the
 limit is refused.
 
-**Stateless conversation:** each request carries the retained history. When the history
-goes over 150 messages, the CLI cuts it down to 100 before sending (0.13.6+; earlier
-versions slid a 150-message window on every round), preserving initial system context,
-the session's first and latest `user` messages, and avoiding orphan tool results. The
-server's 200-message limit and these client numbers form a shared contract; changing one
-requires checking the other.
+**Target.** With `profile_name` set, the gateway resolves that profile. With nothing set,
+the current ShvIA Web source falls back to the `model_pin`/`effort_pin` of the person's
+active Code project (`folders.is_current`, `type = code`), then to the user's default,
+then to the server configuration. Read from that source and not exercised: a request that
+carries `profile_name` but no `model` field — every `anna` request — still receives the
+pin's model, and only the server comes from `profile_name`
+(`CodeChatController::stream`, `requestModel`); see the
+[2026-11-05 status](DOCUMENTATION-REVIEW-20261015.md#status-on-2026-11-05). Pre-stream
+routing errors return `400 {detail, server, models}`.
+
+**Stateless conversation:** each request carries the retained history. Without limits
+from the gateway (an older gateway, or a `model` event without `context_window`), the CLI
+cuts the history down to 100 messages when it goes over 150 (0.13.6+; earlier versions slid
+a 150-message window on every round), preserving initial system context, the session's
+first and latest `user` messages, and avoiding orphan tool results. Those numbers are 3/4
+and 1/2 of the 200-message ceiling the gateway validated until 02/11/2026; changing either
+side requires checking the other.
 
 **Budget from the gateway (0.15.0+).** When the `model` event carries `messages_max` and
-`context_window`, the client budgets against them instead of the fixed numbers:
+`context_window`, the client budgets against them instead of the fixed numbers. The current
+ShvIA Web source sends `messages_max: 5000` (`TetosDoTurno::MESSAGES_MAX_AGENTE`, the same
+constant its validation uses) and the target's window capped at `CODE_CHAT_HISTORY_TOKENS`
+(default 128,000), so with a known window a long turn is budgeted to roughly 64k–90k
+estimated tokens per request and the count cut (past 3,750, down to 2,500) rarely applies:
 
 - the count ceiling becomes `messages_max` (cut past 3/4, down to 1/2). Without a window
   the count stays capped at 200, because a count is then the only budget;
@@ -82,7 +110,17 @@ requires checking the other.
   with the history cut to half of the estimate just sent. Any other cause fails the same
   way again and is reported.
 
-An older gateway sends neither field and the client behaves as 0.13.6–0.14.x.
+An older gateway sends neither field and the client behaves as 0.13.6–0.14.x. A gateway
+that sends `context_window: null` (window unknown) keeps the count at most 200.
+
+**What the gateway does to the request (ShvIA Web source, not this repository).** Before
+inference it trims oversized `role:"tool"` content with a marker, may compress large tool
+outputs (`ToolResultCompressor`, skipped for a request with `X-Shvia-Token-Saver: off`,
+which `anna` does not send), and appends a `user` nudge when its `ToolLoopGuard` sees a
+tool-call loop. On a request whose last message is `user` (a new turn, not a tool round)
+and an on-premises target — or a cloud target with the operator's opt-in — it prefixes that
+message with the person's ai-memory wiki block and the active Code project's skills. None of
+this changes the history `anna` keeps; it changes what the model receives.
 
 ### Imagem no turno do usuário (0.11.4+)
 
@@ -112,6 +150,14 @@ desconhecida) passa — o operador costuma saber o que selecionou.
   (é o que veio no evento `tool_call`/`done`, reenviado tal e qual).
 - **Resultado da tool:** `role:"tool"` + `tool_call_id` (o `id` do call) +
   `content` = a saída (string). Um `role:"tool"` por call.
+- **Text `anna` adds to a tool result:** the stall-guard note at the third repeat (0.15.3+),
+  a one-line pointer to a subfolder's own instruction file on first touch (0.15.6+), a
+  `[saída antiga: …]` stub replacing a pruned output (0.15.1+), and
+  `RECUSADO: o usuário interrompeu o turno…` for a call a stop kept from running (0.14.0+).
+- **Messages `anna` writes itself:** the `system` compaction marker (`[Contexto compactado] …`,
+  one at a time), an interrupted answer kept as `assistant` content ending in
+  `[interrompido pelo usuário]`, and the closing request of a turn that cannot go on
+  (a `user` message starting with `[anna]`, sent once and not kept in the history).
 
 ## 3. Stream de eventos (SSE)
 
@@ -123,12 +169,12 @@ data: {"kind":"<tipo>","data":{...}}
 
 | `kind` | quando | `data` |
 |--------|--------|--------|
-| `model` | 1º, sempre | `{name, model, server, server_label, target_source, request_id, messages_max?, context_window?}` — cabeçalho da sessão; the last two (sent since the shvia-web change of 02/11/2026; absent before) are the target's per-request message ceiling and effective context window in tokens (`null` when unknown) |
+| `model` | 1º, sempre | `{name, model, server, server_label, target_source, request_id, messages_max?, context_window?}` — cabeçalho da sessão; the last two (sent since the shvia-web change of 02/11/2026; absent before) are the target's per-request message ceiling and effective context window in tokens (`null` when unknown). Sent **again** after a failover, with `target_source: "combo_fallback"` and the limits of the target that answered; the client keeps the last one. `anna` reads only `model`, `server_label` and the two limits |
 | `text_delta` | streaming da resposta | `{delta:"<pedaço de texto>"}` — concatenar |
-| `reasoning_delta` | modelos com "pensar" | `{delta:"..."}` — pensamento; o CLI pode mostrar esmaecido ou ocultar |
+| `reasoning_delta` | modelos com "pensar" | `{delta:"..."}` — pensamento (the gateway's `ReasoningSink` redacts instructions it quotes); `anna` discards the content |
 | `tool_call` | modelo pediu ferramenta | `{id, name, arguments:{...}}` — **arguments já é objeto** (decodificado) |
-| `usage` | antes do `done` | `{prompt_tokens, completion_tokens, total_tokens, thinking_time_ms, response_time_ms, effort, cost, cost_estimated}` |
-| `error` | falha | `{message:"...", codigo?, status?}` — seguido de `done`; `codigo` classifies it (`provedor_recusou_pedido` = 4xx from the provider, `provedor_indisponivel` = 5xx) |
+| `usage` | antes do `done` | `{model, profile, server, server_label, prompt_tokens, completion_tokens, total_tokens, thinking_time_ms, response_time_ms, effort, cost, cost_estimated}` — `anna` reads `total_tokens`, `prompt_tokens`, `cost` and `cost_estimated` |
+| `error` | falha | `{message:"...", codigo?, status?}` — seguido de `done`; `codigo` classifies it (`provedor_recusou_pedido` = 4xx from the provider, `provedor_indisponivel` = 5xx, `resposta_vazia` = no text and no tool call, sent as status 502). A read timeout that cut the answer sends `error`, then `usage` and a `done` carrying what arrived; `anna` reports the error and ends the turn without recording that partial text |
 | `done` | fim, sempre | `{text:"<resposta completa>", tool_calls:[{id,name,arguments}]}` |
 
 - **`cost` vs `cost_estimated`** (padrão 2.15.9): `cost` = custo real (US$, provedor
@@ -158,6 +204,15 @@ data: {"kind":"<tipo>","data":{...}}
    more request (the same `tools`, never `tool_choice: none`, which would change
    the rendered prompt and its cache) asks for the turn's last word: done, left,
    next step. Its `user` message is not kept in the history; the answer is
+   streamed like any other, becomes the turn's final text and stays in the
+   history as the assistant's last word. A tool call in it is neither run nor
+   shown.
+6. stall guard (0.15.3+): the same call with the same arguments and the same
+   result (or the same cycle of up to four calls) three times in a row appends
+   a note to that tool result; at five the turn stops — the interactive terminal
+   asks, a host and `-p` get the closing request of step 5, worded for the stall.
+7. a stop (Ctrl-C, NDJSON `cancel`/`exit`; 0.14.0+) ends the turn with a valid
+   history: see "Messages `anna` writes itself" in §2.
 ```
 
 O **servidor nunca executa ferramenta** — só devolve `tool_call`. Execução (e os
@@ -167,10 +222,11 @@ gates de aprovação) são 100% do cliente. Ver `SECURITY_GUIDELINES.md` §3.
 
 | Situação | Forma |
 |----------|-------|
-| Perfil mal-formado / servidor inválido | `400 {detail}` (antes do stream) |
-| Perfil bloqueado pro usuário | `403 {detail}` |
-| Validação de campos | `422 {errors}` |
-| Servidor de inferência off/erro | evento SSE `error` + `done` (stream já aberto) |
+| Missing, invalid or expired key | `401` (before the stream); `anna` prints how to generate a user key |
+| Perfil mal-formado / servidor inválido | `400 {detail, server, models}` (antes do stream) |
+| Perfil bloqueado pro usuário, token without `code:chat`, account without API permission | `403 {detail}` |
+| Validação de campos | `422 {errors}`; an image sent to a target the catalog says has no vision: `422 {detail}` |
+| Servidor de inferência off/erro, empty answer | evento SSE `error` + `done` (stream já aberto) |
 | Rate limit | `429` (Retry-After) |
 
 O CLI deve tratar tanto o **JSON de erro pré-stream** (4xx antes do `text/event-stream`)

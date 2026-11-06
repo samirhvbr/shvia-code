@@ -73,12 +73,13 @@ limit is refused.
 **Target.** With `profile_name` set, the gateway resolves that profile. With nothing set,
 the current ShvIA Web source falls back to the `model_pin`/`effort_pin` of the person's
 active Code project (`folders.is_current`, `type = code`), then to the user's default,
-then to the server configuration. Read from that source and not exercised: a request that
-carries `profile_name` but no `model` field — every `anna` request — still receives the
-pin's model, and only the server comes from `profile_name`
-(`CodeChatController::stream`, `requestModel`); see the
-[2026-11-05 status](DOCUMENTATION-REVIEW-20261015.md#status-on-2026-11-05). Pre-stream
-routing errors return `400 {detail, server, models}`.
+then to the server configuration. A later source recheck on 2026-11-05 against Web
+`2db8252a` (2.114.138) confirms that an explicit `model` **or** `profile_name` prevents
+both halves of the project pin from filling the target. This fixes the earlier finding
+at Web `b24e45a5`, where the pin's model could replace the model in anna's profile.
+See the [dated status](DOCUMENTATION-REVIEW-20261015.md#status-on-2026-11-05).
+This was checked in `CodeChatController::stream` and `PinDoProjetoDeCodeTest`, not
+against a deployed gateway. Pre-stream routing errors return `400 {detail, server, models}`.
 
 **Stateless conversation:** each request carries the retained history. Without limits
 from the gateway (an older gateway, or a `model` event without `context_window`), the CLI

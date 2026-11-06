@@ -22,12 +22,13 @@ against the same source in 0.15.9.
 New since 2026-10-15, found while rechecking the gateway contract (ShvIA Web
 `origin/master` `b24e45a5`, read only):
 
-- **ShvIA Web, not this repository:** `CodeChatController::stream` passes the active Code
-  project's `model_pin` as `requestModel` whenever the request has no `model` field, even
-  when it names `profile_name`. `anna` always sends `profile_name` and never `model`, so a
-  person with a pinned Code project who runs `anna --model X@srv` would get the pin's model
-  on `srv`. Read from source, not exercised; the ShvIA Web test of "explicit request beats
-  the pin" covers `model`, not `profile_name`.
+- **Resolved later on 2026-11-05 in ShvIA Web:** at `b24e45a5`,
+  `CodeChatController::stream` could pass the active project's `model_pin` as
+  `requestModel` even when anna sent an explicit `profile_name`. The subsequent Web
+  fix (`b767f2eb`, included in `2db8252a` / 2.114.138) keeps both pin halves out when
+  either request field names the target; `PinDoProjetoDeCodeTest` now also covers
+  `profile_name`. Source and test definition rechecked; no deployed gateway call was
+  made. This is no longer an open code finding against that Web baseline.
 - A read timeout that cuts an answer reaches `anna` as `error` followed by `done` with the
   partial text; `anna` reports the error and drops that text from the history.
 

@@ -3,6 +3,12 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.16.1 - Mark the gateway profile-pin finding resolved against current Web
+
+The protocol and review-status guides still said an explicit anna profile could be overwritten by the active Code project pin. That Web defect was fixed later on November 5. Recheck Web 2db8252a (2.114.138), including CodeChatController::stream and PinDoProjetoDeCodeTest. State that an explicit model or profile_name excludes both pin halves, and retain the earlier observation as dated, resolved history. This changes no gateway or CLI logic.
+
+Documentation only. Drafted as 0.15.11 before that number shipped and before 0.16.0 landed; renumbered to 0.16.1 with every version carrier, as documentation-only changes require.
+
 ## 0.16.0 - Let an NDJSON host replace the gateway key while anna runs, and repeat a 401 request with the new key
 
 SHVIA-DESKTOP's Code mode passes the web session's Code token, valid for 12 hours, as

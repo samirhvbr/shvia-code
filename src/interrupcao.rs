@@ -10,6 +10,9 @@
 //! and checked where the turn waits: the stream, the retry wait, between tool calls, inside
 //! `bash` (which then kills its process group), and while a host decides a gate or runs a
 //! command. The agent loop then closes the turn with a valid history (see `agent::run_turn`).
+//!
+//! The same reader takes `{"type":"credential"}` lines (0.16.0): a new gateway key, applied at
+//! once — see `credencial`.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -102,9 +105,15 @@ fn host() -> &'static Mutex<Receiver<String>> {
                 if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
                     return; // EOF: dropping `tx` tells the readers
                 }
-                let tipo = serde_json::from_str::<serde_json::Value>(line.trim())
-                    .ok()
-                    .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string));
+                let valor = serde_json::from_str::<serde_json::Value>(line.trim()).ok();
+                // A new gateway key (0.16.0) is applied here, at once, and never queued: a turn
+                // or a gate waiting on the queue must not see it, and nothing downstream may log
+                // or echo it (`credencial`).
+                if let Some(chave) = valor.as_ref().and_then(crate::credencial::da_linha) {
+                    crate::credencial::trocar(chave);
+                    continue;
+                }
+                let tipo = valor.and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string));
                 match tipo.as_deref() {
                     Some("cancel") => {
                         // Honored for the turn in progress, or for a `user` turn already

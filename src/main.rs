@@ -10,6 +10,7 @@ mod agent;
 mod api;
 mod checkpoint;
 mod config;
+mod credencial;
 mod diff;
 mod estagnacao;
 mod frontend;

@@ -81,6 +81,12 @@ impl Frontend for JsonSink {
         self.emit(json!({"type":"warn","message":msg}));
     }
 
+    fn pedir_credencial(&mut self) -> bool {
+        // No key in the event: the host already has it, and the event is read by a page.
+        self.emit(json!({"type":"credential_expired"}));
+        true
+    }
+
     fn turno_interrompido(&mut self) {
         // A machine-readable marker before `usage`/`turn_done`, so a host can tell a stopped
         // turn from a finished one without parsing the warning text.

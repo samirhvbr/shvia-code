@@ -6,6 +6,7 @@
 
 use crate::api;
 use crate::config::Config;
+use crate::credencial;
 use crate::estagnacao::{Estagnacao, Veredito};
 use crate::frontend::Frontend;
 use crate::interrupcao;
@@ -365,6 +366,27 @@ fn compactar_historico(messages: &mut Vec<Message>, orc: &Orcamento) -> Corte {
 /// SHVIA-WEB. A context overflow is the case that matters here.
 const PROVEDOR_RECUSOU: &str = "provedor_recusou_pedido";
 
+/// How long a 401 waits for the host's new key (0.16.0). A host renews it over the network
+/// (SHVIA-DESKTOP asks the web session for a new Code token), which takes a second or two;
+/// one that never answers — an older host — costs this much before the 401 is reported.
+const CREDENCIAL_ESPERA: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Waits for a key newer than generation `antes`. `false` on timeout or when the turn is
+/// stopped, and then the 401 is reported as before.
+async fn esperar_credencial(antes: u64) -> bool {
+    let ate = tokio::time::Instant::now() + CREDENCIAL_ESPERA;
+    while tokio::time::Instant::now() < ate {
+        if credencial::geracao() != antes {
+            return true;
+        }
+        if interrupcao::pedido() {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    credencial::geracao() != antes
+}
+
 fn avisar_corte(fe: &mut dyn Frontend, c: &Corte) {
     let Some(motivo) = &c.motivo else { return };
     let onde = match motivo {
@@ -534,6 +556,7 @@ pub async fn run_turn(
         avisar_corte(fe, &compactar_historico(messages, &orc));
         let mut tentativa = 0;
         let mut recuperou = false;
+        let mut pediu_credencial = false;
         let result = loop {
             fe.waiting();
             let enviados = chars_do_pedido(messages, defs_chars);
@@ -562,6 +585,17 @@ pub async fn run_turn(
                         r.error.as_deref().unwrap_or("sem detalhe")
                     ));
                     avisar_corte(fe, &corte);
+                    continue;
+                }
+            }
+            // The key was refused (0.16.0). A host that hands out short-lived keys can send a
+            // new one; the request never reached the model, so sending it again repeats nothing.
+            // Once per round: a second 401 with a fresh key is not an expired key.
+            if r.codigo.as_deref() == Some(api::NAO_AUTORIZADO) && !pediu_credencial {
+                pediu_credencial = true;
+                let antes = credencial::geracao();
+                if fe.pedir_credencial() && esperar_credencial(antes).await {
+                    fe.warn("credencial renovada pela casca — repetindo o pedido.");
                     continue;
                 }
             }

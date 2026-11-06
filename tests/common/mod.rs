@@ -192,6 +192,7 @@ fn read_request(stream: &mut TcpStream) -> Value {
     reader.read_line(&mut line).unwrap();
     assert!(line.starts_with("POST /api/v1/code/chat HTTP/1.1"), "{line}");
     let mut length = None;
+    let mut key = None;
     loop {
         line.clear();
         assert!(reader.read_line(&mut line).unwrap() > 0);
@@ -202,11 +203,17 @@ fn read_request(stream: &mut TcpStream) -> Value {
             if name.eq_ignore_ascii_case("content-length") {
                 length = Some(value.trim().parse::<usize>().unwrap());
             }
+            if name.eq_ignore_ascii_case("x-api-key") {
+                key = Some(value.trim().to_string());
+            }
         }
     }
     let mut body = vec![0; length.expect("JSON request content length")];
     reader.read_exact(&mut body).unwrap();
-    serde_json::from_slice(&body).unwrap()
+    let mut body: Value = serde_json::from_slice(&body).unwrap();
+    // The key the request carried, kept beside the body (no test compares whole bodies).
+    body["__api_key"] = json!(key);
+    body
 }
 
 /// A running `anna --json` whose NDJSON events are read as they come, so a test can answer a

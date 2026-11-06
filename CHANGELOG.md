@@ -3,11 +3,33 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
-## 0.15.11 - Mark the gateway profile-pin finding resolved against current Web
+## 0.16.1 - Mark the gateway profile-pin finding resolved against current Web
 
 The protocol and review-status guides still said an explicit anna profile could be overwritten by the active Code project pin. That Web defect was fixed later on November 5. Recheck Web 2db8252a (2.114.138), including CodeChatController::stream and PinDoProjetoDeCodeTest. State that an explicit model or profile_name excludes both pin halves, and retain the earlier observation as dated, resolved history. This changes no gateway or CLI logic.
 
-Documentation-only review; runtime version carriers stay unchanged under the requested scope. This draft requires normal version integration before landing.
+Documentation only. Drafted as 0.15.11 before that number shipped and before 0.16.0 landed; renumbered to 0.16.1 with every version carrier, as documentation-only changes require.
+
+## 0.16.0 - Let an NDJSON host replace the gateway key while anna runs, and repeat a 401 request with the new key
+
+SHVIA-DESKTOP's Code mode passes the web session's Code token, valid for 12 hours, as
+`SHVIA_API_KEY`. On 06/11/2026 an autonomous run paused at 19:57 waiting for the person's
+answer; the answer came at 07:51 the next day, the token had expired overnight, and the first
+request of the resumed iteration got a 401. The key was read once at start, so the run ended and
+the only way out was a new process with an empty history.
+
+- **`{"type":"credential","api_key":"…"}` on stdin** replaces the key at any time — between
+  turns, during a turn, while a gate waits. The stdin reader applies it and never queues, logs or
+  echoes it (`src/credencial.rs`). A blank key is ignored.
+- **A 401 before the stream** now emits `credential_expired` under an NDJSON host and waits up to
+  60 s for a new key, then sends the same request again. Once per round: a second 401 with the
+  fresh key ends the turn with the error, as before. The terminal is unchanged.
+- Older engines ignore the new line everywhere, so a host can send it without knowing the
+  engine's version; older hosts never answer, and the 401 is reported after the wait.
+- `tests/credential_renewal.rs` runs the real binary against the scripted gateway: the retry
+  carries the new key and the same history, a key sent between turns is used by the next turn and
+  adds no message, and a second 401 ends the turn. With the retry disabled, the two 401 tests fail.
+  The fake gateway now records each request's `X-API-Key`.
+- Protocol: `docs/embedding.md` (the credential handshake) and `docs/protocolo.md`.
 
 ## 0.15.11 - Require confirmation for shell escapes outside single quotes
 

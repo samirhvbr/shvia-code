@@ -83,6 +83,9 @@ pub fn nova_tentativa(r: &TurnResult, tentativa: u32) -> Option<Duration> {
 /// Statuses that clear by themselves: rate limit, request timeout, and the gateway or its
 /// proxy being briefly unavailable (deploy, maintenance mode). A 500 is a gateway defect and
 /// a 4xx is a request that will fail the same way again, so neither is retried.
+/// `TurnResult::codigo` of a 401 before the stream: the key was refused (0.16.0).
+pub const NAO_AUTORIZADO: &str = "nao_autorizado";
+
 fn status_retentavel(status: u16) -> bool {
     matches!(status, 408 | 429 | 502 | 503 | 504)
 }
@@ -104,9 +107,8 @@ pub async fn code_chat(
     tools: Vec<ToolDef>,
     on_event: &mut dyn FnMut(&Event),
 ) -> Result<TurnResult> {
-    let api_key = cfg
-        .api_key
-        .clone()
+    // The host's latest key wins over the one read at start (0.16.0, `credencial`).
+    let api_key = crate::credencial::atual(cfg.api_key.as_deref())
         .ok_or_else(|| anyhow!("sem API key — exporte SHVIA_API_KEY (ou configure ~/.config/shvia-code/config.toml)"))?;
 
     let body = ChatRequest {
@@ -167,7 +169,10 @@ pub async fn code_chat(
                 .to_string(),
             _ => body_detail.unwrap_or_else(|| format!("HTTP {status}")),
         };
-        return Ok(TurnResult { error: Some(detail), retentavel, retry_after: espera, ..Default::default() });
+        // A 401 carries its own code (0.16.0): the agent loop asks the host for a new key
+        // instead of ending the turn (`agent::run_turn`, `credencial`).
+        let codigo = (status.as_u16() == 401).then(|| NAO_AUTORIZADO.to_string());
+        return Ok(TurnResult { error: Some(detail), retentavel, retry_after: espera, codigo, ..Default::default() });
     }
 
     let mut result = TurnResult::default();

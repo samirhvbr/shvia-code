@@ -46,6 +46,13 @@ pub trait Frontend {
         let _ = o_que;
         false
     }
+    /// The gateway refused the key with 401 (0.16.0): can a new one come? `true` means the
+    /// host was asked and the agent loop waits a while for a `credential` line before trying
+    /// the same request again. Only an NDJSON host can answer; the terminal says no, and the
+    /// 401 ends the turn as before.
+    fn pedir_credencial(&mut self) -> bool {
+        false
+    }
     /// The person stopped the turn (Ctrl-C or the host's `cancel`); `turn_end` follows. What
     /// already ran stays done and in the history (0.14.0).
     fn turno_interrompido(&mut self) {

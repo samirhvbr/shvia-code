@@ -222,7 +222,7 @@ gates de aprovação) são 100% do cliente. Ver `SECURITY_GUIDELINES.md` §3.
 
 | Situação | Forma |
 |----------|-------|
-| Missing, invalid or expired key | `401` (before the stream); `anna` prints how to generate a user key |
+| Missing, invalid or expired key | `401` (before the stream); `anna` prints how to generate a user key. Under an NDJSON host (0.16.0) it first emits `credential_expired` and waits up to 60 s for a new key, then repeats the request once ([embedding](embedding.md)) |
 | Perfil mal-formado / servidor inválido | `400 {detail, server, models}` (antes do stream) |
 | Perfil bloqueado pro usuário, token without `code:chat`, account without API permission | `403 {detail}` |
 | Validação de campos | `422 {errors}`; an image sent to a target the catalog says has no vision: `422 {detail}` |

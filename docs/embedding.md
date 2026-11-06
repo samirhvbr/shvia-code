@@ -46,6 +46,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | `{"type":"user","text":"...","images":["BASE64"]}` | starts a persistent turn; `images` is optional, pure base64 without a data URL prefix |
 | `{"type":"exit"}` | encerra o motor (0.14.0+: also stops the turn in progress first) |
 | `{"type":"cancel"}` | **stops the turn in progress** (0.14.0+): the stream is dropped, a running `bash` is killed with its process group, a pending gate is refused, and every tool call not yet run gets a `RECUSADO` result; then `interrupted`, `usage`, `turn_done`. Also stops a `user` turn already queued; ignored when nothing is running or queued |
+| `{"type":"credential","api_key":"…"}` | **replaces the gateway key** (0.16.0+), at any time: between turns, during a turn, while a gate waits. The next request uses it. The line is applied by the stdin reader and never queued, logged or echoed; a blank key is ignored. See the credential handshake below |
 | `{"id":"…","decision":"approve"\|"always"\|"reject"}` | **resposta a um `gate_request`**. Since 0.15.8 a decision whose `id` is another gate's is ignored with a `warn` (a late answer to a gate a `cancel` already closed must not decide the next one); a decision without `id` is still taken, for older hosts — send the `id` |
 | `{"id":"…","decision":"continue"\|"stop","message":"…"}` | **answer to a `stop_request`** (engines that hold a turn open — see the handshake below; `anna` never asks) |
 
@@ -60,6 +61,7 @@ Tudo é **uma linha JSON por mensagem** (NDJSON), nos dois sentidos.
 | `gate_request` | `id`, `scope`, `policy`, `preview` | **pede aprovação** — o motor BLOQUEIA até a decisão (`id` = o `tool_call.id`, casa com o `tool_result`) |
 | `usage` | `tokens`, `cost`, `estimated` | cumulative telemetry since this process started, not a per-turn delta |
 | `turn_done` | — | turno terminou; pode mandar o próximo `user` |
+| `credential_expired` | — | (0.16.0+) the gateway refused the key with 401, before any model ran. The engine waits up to 60 s for a `credential` line, then sends the same request again with it; with no answer, or with a second 401, the turn ends with `error` as before. The event carries no key |
 | `interrupted` | — | (0.14.0+) the turn was stopped by `cancel`/`exit`; `usage` and `turn_done` follow. What already ran stays done; the history stays valid for the next `user` |
 | `stop_request` | `id`, `iteration`, `last`, `reason` | **optional, per engine** — the model wants to end the turn and the engine asks the host whether to continue; **BLOCKS** until the answer. `anna` does not emit it |
 | `error` / `warn` | `message` | erro fatal do turno / aviso |
@@ -113,6 +115,31 @@ anna → {"type":"tool_result","id":"call_1","name":"edit_file","bytes":43,"cont
 Se o stdin fechar com um `gate_request` pendente, o motor **nega** (seguro). A
 `{"type":"exit"}` or a `cancel` while a gate waits also refuses it. Lines without a
 `decision` are ignored while the gate waits.
+
+### The credential handshake (0.16.0)
+
+A host that hands `anna` a short-lived key renews it without restarting the process, so the
+session keeps its history. Measured on 06/11/2026: SHVIA-DESKTOP passes the web session's Code
+token, valid for 12 hours, as `SHVIA_API_KEY`; an autonomous run paused overnight waiting for the
+person, the answer came the next morning, and the resumed iteration's first request got a 401.
+Until 0.15.x the key was read once at start, so the only way out was a new process and an empty
+history.
+
+```
+anna → {"type":"credential_expired"}           (the round waits, up to 60 s)
+host → (asks its own source for a new key)
+host → {"type":"credential","api_key":"<new key>"}
+anna → {"type":"warn","message":"credencial renovada pela casca — repetindo o pedido."}
+anna → (the same request again, with the new key)
+```
+
+- **Once per round.** A 401 with the key just received is not an expired key: the turn ends
+  with the error.
+- **A host may also send the key ahead of time**, before it expires; nothing is emitted then.
+- **Older hosts** never answer: the round waits the 60 s and reports the 401 as before. Older
+  engines ignore a `credential` line everywhere (the main loop, a gate, the host runner), so a
+  host can send it without knowing the engine's version.
+- `cancel` during the wait stops the turn as usual.
 
 ### The stop handshake (`stop_request`) — optional, per engine
 
@@ -197,7 +224,9 @@ Quem roda as ferramentas:
 
 ## Segurança
 
-- Chave só via env (§ SECURITY 2.4); o host repassa no ambiente do filho.
+- Chave só via env (§ SECURITY 2.4); o host repassa no ambiente do filho. A renewed key
+  (0.16.0) arrives on stdin, never as an argument, and is never written to an event, a log or
+  the session file.
 - Local filesystem tools use project path guards; an approved shell command runs with
   account permissions, and filename denylist coverage is incomplete. See
   [security](../SECURITY_GUIDELINES.md).

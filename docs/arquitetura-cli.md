@@ -32,7 +32,8 @@ src/
   types.rs       Request, message, tool and event wire types.
   tools.rs       Eleven-tool registry, file/search/edit/shell/Git/task execution and classification.
   guard.rs       Requested-name denylist and canonical project-path helpers.
-  interrupcao.rs Turn stop flag: Ctrl-C handler, NDJSON stdin reader for `cancel`, turn guard.
+  interrupcao.rs Turn stop flag: Ctrl-C handler, NDJSON stdin reader for `cancel` and `credential`, turn guard.
+  credencial.rs  The gateway key a host can replace while `anna` runs (0.16.0).
   runner.rs      Local/host runners and the read-only role decorator.
   frontend.rs    Frontend trait for rendering and approval decisions.
   gate.rs        Auto/Confirm/Always policy, previews and terminal confirmation helpers.

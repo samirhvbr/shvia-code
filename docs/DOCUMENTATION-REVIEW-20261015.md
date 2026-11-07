@@ -39,9 +39,9 @@ were measured by running the classification code of `src/tools.rs` in a harness)
   when the cut falls inside a multibyte character. It is reached by shell and Git output over
   32 KiB and by the checkpoint label of a destructive command over 60 bytes; nothing catches
   the panic, so `anna` (or the NDJSON sidecar) exits.
-- The shell tool's child inherits the whole environment, `SHVIA_API_KEY` included; any
-  command that prints the environment, or project code run by an automatic build/test, can
-  read the key.
+- **Resolved in 0.16.2.** The shell tool's child inherited the whole environment, including
+  `SHVIA_API_KEY`. A command that printed its environment, or project code run by an automatic
+  build/test, could read the key. Anna now starts its local processes with an explicit environment list.
 - The shell classifier gaps listed in [the tool catalog](ferramentas.md) (allowlisted
   commands with output options, lexical argument checks, prefix options read as taking a
   value, substring pipe-to-shell rule).

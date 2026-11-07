@@ -30,6 +30,7 @@ mod session;
 mod stats;
 mod stats_html;
 mod stats_term;
+mod subprocess;
 mod telemetry;
 mod term;
 mod tools;
@@ -46,7 +47,6 @@ use rustyline::DefaultEditor;
 use session::{Session, Store};
 use stats::{Range, Tab};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use telemetry::Telemetry;
 use types::Message;
 use ui::Ui;
@@ -615,11 +615,18 @@ fn display_name() -> String {
 fn open_in_browser(path: &Path) {
     let p = path.to_string_lossy().to_string();
     #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(&p).status();
+    let _ = subprocess::command("open").arg(&p).status();
     #[cfg(target_os = "linux")]
-    let _ = Command::new("xdg-open").arg(&p).status();
+    {
+        // These select the local desktop session for the explicit stats viewer action.
+        let desktop = ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE"];
+        let _ = subprocess::command("xdg-open")
+            .envs(desktop.into_iter().filter_map(|name| std::env::var_os(name).map(|value| (name, value))))
+            .arg(&p)
+            .status();
+    }
     #[cfg(target_os = "windows")]
-    let _ = Command::new("cmd").args(["/C", "start", "", &p]).status();
+    let _ = subprocess::command("cmd").args(["/C", "start", "", &p]).status();
 }
 
 fn print_config(cfg: &Config) {

@@ -131,6 +131,12 @@ receive session approval. `t` applies to a tool scope, such as `write_file` or `
 until the process exits. Automatic shell commands can include builds and tests;
 they run project code and can have side effects.
 
+Local commands and Git hooks inherit a small set of development settings from Anna. The
+gateway key, provider tokens and arbitrary project environment variables stay out of that
+environment. Proxy endpoints are preserved without embedded authentication. Run a task that
+requires your own exported credentials in a separate terminal. See the
+[security guide](../SECURITY_GUIDELINES.md#2-client-controls-and-limits).
+
 Two write rules act before or above the approval card ([tools](ferramentas.md)):
 `write_file` over an existing file is refused unless the model has read the whole file in
 this process and it has not changed since (0.15.7+; `edit_file` is not affected), and a

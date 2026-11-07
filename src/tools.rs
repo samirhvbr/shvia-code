@@ -13,6 +13,7 @@
 use crate::frontend::Frontend;
 use crate::gate::{Policy, Preview};
 use crate::guard;
+use crate::subprocess;
 use crate::types::{ToolCall, ToolDef};
 use globset::Glob;
 use ignore::WalkBuilder;
@@ -20,7 +21,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -534,7 +535,7 @@ fn bash(root: &Path, command: &str, why: &str, id: &str, fe: &mut dyn Frontend) 
 /// então ler, um comando falante travaria — e o timeout "consertaria" matando um processo
 /// que estava saudável. As duas threas drenam os pipes enquanto o comando corre.
 fn executar_bash(root: &Path, command: &str, teto: Option<Duration>) -> String {
-    let mut cmd = Command::new("sh");
+    let mut cmd = subprocess::command("sh");
     cmd.arg("-c")
         .arg(command)
         .current_dir(root)
@@ -718,7 +719,7 @@ fn matar_grupo(filho: &mut Child) {
     // says "No such process". On GitHub's ubuntu-latest runner the group survived and
     // `comando_que_trava_e_morto_no_teto` took the full 30 s (0.11.28).
     let pgid = filho.id();
-    let _ = Command::new("kill")
+    let _ = subprocess::command("kill")
         .arg("-KILL")
         .arg("--")
         .arg(format!("-{pgid}"))
@@ -738,7 +739,7 @@ fn matar_grupo(filho: &mut Child) {
     // The Windows CI measured it once 0.11.27 stopped hiding test failures.
     // `taskkill /T` walks the tree by parent PID; `/F` because a hung process will not
     // answer a polite close.
-    let _ = Command::new("taskkill")
+    let _ = subprocess::command("taskkill")
         .args(["/T", "/F", "/PID", &filho.id().to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1424,7 +1425,7 @@ fn cap(s: &str, max: usize) -> String {
 // ── Git (C2) ────────────────────────────────────────────────────────────────
 
 fn run_git(root: &Path, args: &[&str]) -> String {
-    match Command::new("git").args(args).current_dir(root).output() {
+    match subprocess::command("git").args(args).current_dir(root).output() {
         Ok(o) => {
             let out = String::from_utf8_lossy(&o.stdout);
             let err = String::from_utf8_lossy(&o.stderr);
@@ -1541,7 +1542,7 @@ mod tests {
         // Windows an MSYS PID, which only that runtime resolves), and a binary missing from
         // PATH made `unwrap_or(false)` read "could not run" as "dead", a pass that measured
         // nothing. A shell that cannot run fails the test instead.
-        let status = Command::new("sh")
+        let status = subprocess::command("sh")
             .arg("-c")
             .arg(format!("kill -0 {pid}"))
             .stdout(Stdio::null())

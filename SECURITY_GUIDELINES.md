@@ -46,12 +46,20 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
    after the argument check. The shell argument check is lexical and has further gaps,
    measured on 2026-11-05: backslash escapes, a path glued to an option, symlinks, `cd`
    to home or back, `.ssh/`/`.aws/` at the start of a relative path, private keys not named
-   `id_rsa*`, Git object paths (`git show REV:path`), and allowlisted commands that print the
-   environment (which carries `SHVIA_API_KEY`). Do not treat ignore rules or filename filters
+   `id_rsa*`, and Git object paths (`git show REV:path`). Do not treat ignore rules or filename filters
    as secret containment. An approved shell command has the user's filesystem/network access.
 4. **API key (A4).** Runtime authentication comes from nonempty `SHVIA_API_KEY` or
    `api_key` in the OS configuration directory; `anna config` reports the path and key
-   presence without printing the key. Use `anna config set-key` through stdin. Its
+   presence without printing the key. Since 0.16.2 local subprocesses (including shell,
+   Git hooks, checkpoint filters, plan verification and the stats launcher) start with an explicit
+   list of environment variables for development tools. The list covers executable and user
+   paths, locale, platform and toolchain settings, certificate paths and Git identity. Proxy
+   settings pass through as endpoint origins with embedded authentication removed. Provider keys,
+   `SHVIA_API_KEY`, `AI_MEMORY_TOKEN`, custom environment variables and agent sockets are outside
+   the list. This boundary limits inherited environment variables. Commands still run with the
+   caller's filesystem and process privileges, and a host that runs its own commands supplies its
+   own environment policy.
+   Use `anna config set-key` through stdin. Its
    positional key form exists but exposes the value to arguments/history. On Unix the
    setter applies `0600` to a temporary file before rename; it currently writes content
    before applying that mode, so a restrictive `umask` matters. Loaded config containing

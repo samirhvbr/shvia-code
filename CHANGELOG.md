@@ -3,6 +3,15 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.16.2 - Keep gateway credentials out of Anna subprocesses
+
+Shell commands, Git hooks, checkpoint filters and plan verification used to inherit the full
+process environment. Their output could send the gateway key or another inherited secret to the
+model. Anna now starts subprocesses with a list of ordinary development variables and sends the
+gateway credential from the engine itself. Proxy endpoints stay available without embedded
+credentials. The shell and a commit hook are exercised against a loopback gateway with synthetic
+credentials, including an assertion that Anna still authenticates its own requests.
+
 ## 0.16.1 - Mark the gateway profile-pin finding resolved against current Web
 
 The protocol and review-status guides still said an explicit anna profile could be overwritten by the active Code project pin. That Web defect was fixed later on November 5. Recheck Web 2db8252a (2.114.138), including CodeChatController::stream and PinDoProjetoDeCodeTest. State that an explicit model or profile_name excludes both pin halves, and retain the earlier observation as dated, resolved history. This changes no gateway or CLI logic.

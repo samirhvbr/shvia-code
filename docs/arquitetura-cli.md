@@ -56,6 +56,7 @@ src/
   telemetry.rs   Token/cost accumulation from gateway usage.
   stats.rs       Pure session aggregation, dates, ranges, models and heatmap data.
   stats_term.rs  Terminal statistics rendering.
+  subprocess.rs  Environment allowlist for local child processes.
   stats_html.rs  Escaped standalone HTML statistics rendering.
 ```
 

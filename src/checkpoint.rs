@@ -11,8 +11,8 @@
 //! Limite documentado: o restore devolve o CONTEÚDO rastreado da foto;
 //! arquivos criados DEPOIS dela permanecem no disco (remoção é manual).
 
+use crate::subprocess;
 use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,7 +29,7 @@ fn now_secs() -> i64 {
 }
 
 fn git(root: &Path, envs: &[(&str, String)], args: &[&str]) -> Option<String> {
-    let mut c = Command::new("git");
+    let mut c = subprocess::command("git");
     // `core.autocrlf=false`: the photo and the rollback must be byte-exact. With the
     // user's autocrlf=true (the Windows default), `restore` converted LF to CRLF on the way
     // back, so a rollback rewrote the line endings of files the dev never touched.
@@ -108,6 +108,7 @@ pub fn restore(root: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
     use super::*;
 
     /// `LAST_SNAPSHOT` is a process-wide debounce (30 s), so two tests that snapshot in

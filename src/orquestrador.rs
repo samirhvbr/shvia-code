@@ -29,6 +29,7 @@ use crate::papel::Papel;
 use crate::plano::{self, Plano, Veredito};
 use crate::project::Project;
 use crate::runner::{LocalRunner, SomenteLeitura, ToolRunner};
+use crate::subprocess;
 use crate::telemetry::Telemetry;
 use crate::tools;
 use crate::types::Message;
@@ -36,7 +37,6 @@ use crate::ui::Ui;
 use anyhow::{bail, Result};
 use std::collections::HashSet;
 use std::path::Path;
-use std::process::Command;
 
 /// Tentativas de conserto por gate. Dois é o suficiente: se o executor não
 /// resolveu em duas, mais uma volta é queima de token com o dev esperando.
@@ -353,7 +353,7 @@ fn entrada_revisor(plano: &Plano, root: &Path) -> String {
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
-    match Command::new("git").args(args).current_dir(root).output() {
+    match subprocess::command("git").args(args).current_dir(root).output() {
         Ok(o) => {
             let s = String::from_utf8_lossy(&o.stdout).into_owned();
             if s.trim().is_empty() { "(vazio)".into() } else { s }
@@ -403,7 +403,7 @@ fn falha_verificacao(root: &Path, cmds: &[String], ui: &mut Ui) -> Option<String
             continue;
         }
         ui.note(&format!("  $ {cmd}"));
-        let Ok(o) = Command::new("sh").arg("-c").arg(cmd).current_dir(root).output() else {
+        let Ok(o) = subprocess::command("sh").arg("-c").arg(cmd).current_dir(root).output() else {
             ui.warn(&format!("não consegui executar '{cmd}' — pulando."));
             continue;
         };

@@ -3,6 +3,13 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.16.3 - Close automatic shell approval bypasses
+
+Unquoted line breaks and commands that select a subprocess or write through an option now require
+approval. Ordinary searches and reads, quoted multiline patterns, and approved project build and
+test entry points remain available. Automatic Git reads suppress configured external diff drivers,
+text conversion, signature display and filesystem monitoring where applicable.
+
 ## 0.16.2 - Keep gateway credentials out of Anna subprocesses
 
 Shell commands, Git hooks, checkpoint filters and plan verification used to inherit the full

@@ -43,8 +43,9 @@ were measured by running the classification code of `src/tools.rs` in a harness)
   `SHVIA_API_KEY`. A command that printed its environment, or project code run by an automatic
   build/test, could read the key. Anna now starts its local processes with an explicit environment list.
 - The shell classifier gaps listed in [the tool catalog](ferramentas.md) (allowlisted
-  commands with output options, lexical argument checks, prefix options read as taking a
-  value, substring pipe-to-shell rule).
+  lexical argument checks, prefix options read as taking a value, substring pipe-to-shell
+  rule). 0.16.3 closed the documented direct output options, unquoted newlines and
+  ripgrep subprocess options in the automatic gate.
 - `/rollback aplicar` deletes files staged after the snapshot (`git restore` without
   overlay), while its note says new files remain.
 - The Git wrappers ignore Git's exit status and, like checkpoint Git calls, have no

@@ -140,7 +140,7 @@ the destructive menu for these cards, so it reads *Sim, executar*.
    "properties":{"command":{"type":"string"},
      "why":{"type":"string","description":"1 linha: por que este comando."}}}}
 ```
-- **Allowlist (auto)** — a lista viva é a `ALLOWLIST` em `src/tools.rs`; em resumo:
+- **Allowlist (auto)** — a lista viva é a `ALLOWLIST` e suas guardas em `src/tools.rs`; em resumo:
   navegação e leitura (`ls`, `cat`, `pwd`, `echo`, `cd`, `head`, `tail`, `wc`, `file`,
   `stat`, `tree`, `du`, `df`, `realpath`, `readlink`…), busca e filtro (`grep`, `egrep`,
   `fgrep`, `rg`, `ag`, `cut`, `sort`, `uniq`, `nl`, `diff`, `jq`, `column`, `tr`, `which`,
@@ -149,13 +149,17 @@ the destructive menu for these cards, so it reads *Sim, executar*.
   build/teste (`composer test`, `npm test|run`, `cargo check|clippy|test|build`, `php -l`,
   `phpunit`, `pytest`, `make test`). `find`, `git branch`, `sort` and `uniq` are auto only in
   their read forms. `curl`, `wget`, `ssh` e `docker` ficam **fora** de propósito.
-- **Only `&&` composes automatic segments.** A pipe, `;`, a redirection (`>`, `<`), a lone
-  `&`, `$(…)` or backticks send the command to **confirm**.
-- **"Auto" means "not recognized as writing", not "read-only".** Some allowlisted commands
-  take an output option that writes a file — for example `git diff --output=FILE`,
-  `git log --output=FILE`, `tree -o FILE`, or `sort` with the output glued to the flag — and
-  `rg --pre=CMD` runs a program; those stay auto (measured on 2026-11-05 with the classifier
-  code of 0.15.8).
+- **Only `&&` composes automatic segments.** Unquoted newlines, shell comments,
+  pipes, `;`, redirections, a lone `&`, `$(…)` and backticks require confirmation.
+  A newline inside a quoted argument stays literal.
+- **Options that select executables or write output require confirmation.** Examples
+  include `rg --pre` and `--hostname-bin`, `git diff/log --output`, `tree -o`, and
+  grouped or attached `sort -o` options. Automatic Git reads switch off external diff
+  drivers, text conversion, explicit signature display and filesystem monitoring where
+  applicable. Git can still run a configured clean filter when it reads the working tree.
+  Build and test entry points trust project scripts and configuration. Direct overrides
+  such as `npm test --script-shell=…`, `cargo test --config …` or `make test --eval=…`
+  require confirmation.
 - 🔴 **O nome do comando não basta — o ARGUMENTO também é conferido** (desde a 0.11.8,
   achado F-02 da revisão de 01/09/2026). Antes, a lista era casada só pelo **prefixo**, e
   `cat .env` saía em **auto**: a `denylist` que a tool `read_file` respeita era contornável
@@ -166,8 +170,8 @@ the destructive menu for these cards, so it reads *Sim, executar*.
   por token, não pela string crua. **Its limits, measured on 2026-11-05:** the check is
   lexical — it does not resolve symlinks; it skips every token that starts with `-`, so a
   path glued to an option (`--from-file=…`) is not checked; `.ssh/` and `.aws/` are matched only after a `/`,
-  and private keys by name only as `id_rsa*`; and `cd` with no argument (home) or `cd -`
-  leaves the project for the rest of the `&&` chain.
+  and private keys by name only as `id_rsa*`. Automatic `cd` requires one explicit
+  relative path. The path check still allows a symlink to point outside the project.
 - **Shell escapes require confirmation (0.15.11).** A backslash outside single quotes sends
   the whole command to **confirm**, including inside double quotes and in `&&` chains.
   ANSI-C quoted arguments (`$'...'`) also ask: their backslashes are decoded by the shell.
@@ -178,14 +182,16 @@ the destructive menu for these cards, so it reads *Sim, executar*.
 - **Comandos que a lista deixava passar pelo nome e escrevem/executam pelo argumento**
   (F-03): `awk` **saiu do auto** (`system("…")` e `print > "arq"` moram dentro do programa,
   entre aspas, invisíveis ao scanner — mesmo critério que já mantinha o `sed` fora);
-  `git branch` só é auto nas formas de leitura (`-D`/`-m` pedem cartão); `sort -o` e o
-  segundo posicional do `uniq` são destino de escrita.
+  `git branch` só é auto nas formas de leitura. Para filtrar por nome, use
+  `git branch --list PADRÃO`. `sort -o` e o segundo posicional do `uniq` escrevem
+  no destino e pedem confirmação.
 - 🔴 **An unquoted glob in a command that prints file contents asks (since 0.13.9).** The
   argument check reads tokens literally, and the shell expands globs after it: `cat .e*`,
   `cat certs/*` and `head -n 50 .e*` were **auto** and printed `.env` and
   `certs/server.pem` (external review, 26/10/2026). Now a non-flag word with `*`, `?`, `[`
-  or a `{a,b}` list outside quotes sends the segment to **confirm**. Flags
-  (`--include=*.rs`) and quoted patterns (`grep -n "fn .*x" src`) do not count, and
+  or a `{a,b}` list outside quotes sends the segment to **confirm**. A glob in an
+  option name also asks. Attached values such as `--include=*.rs` and quoted
+  patterns such as `grep -n "fn .*x" src` stay automatic, and
   commands that only print names or metadata (`ls`, `wc`, `file`, `stat`, `du`, `tree`,
   `git ls-files`…) stay auto. The price: `grep TODO src/*.rs` now asks; `grep -rn TODO src/`
   does not.

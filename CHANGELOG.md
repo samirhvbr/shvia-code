@@ -3,6 +3,13 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.16.4 - Cut long tool output on a character boundary
+
+`cap()` sliced the output by byte, so a bash or Git result over 32 KiB, or a destructive command
+over 60 bytes in a checkpoint label, panicked when the cut fell inside an accented character, and
+anna and its sidecar went down with it. The cut now steps back to the last whole character.
+Found by the documentation review of 05/11/2026.
+
 ## 0.16.3 - Close automatic shell approval bypasses
 
 Unquoted line breaks and commands that select a subprocess or write through an option now require

@@ -1474,10 +1474,16 @@ pub(crate) fn git_leitura(cmd: &str, args: &[&str]) -> std::process::Command {
 
 fn cap(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}\n… [saída cortada em {max} bytes]", &s[..max])
+        return s.to_string();
     }
+    // Cut on a character boundary: slicing a `str` in the middle of a multibyte character
+    // panics, and a bash or git output over the limit with an accent took anna and its
+    // sidecar down with it.
+    let mut fim = max;
+    while !s.is_char_boundary(fim) {
+        fim -= 1;
+    }
+    format!("{}\n… [saída cortada em {max} bytes]", &s[..fim])
 }
 
 // ── Git (C2) ────────────────────────────────────────────────────────────────
@@ -1526,6 +1532,18 @@ fn git_commit(root: &Path, message: &str, add_all: bool, id: &str, fe: &mut dyn 
 
 #[cfg(test)]
 mod tests {
+    // ── cap (0.16.4): a cut never lands inside a character ───────────────────────────────────
+
+    #[test]
+    fn cap_cuts_on_a_character_boundary() {
+        // "é" is two bytes: a limit of 5 falls inside the third one.
+        let s = "ééééé";
+        let out = super::cap(s, 5);
+        assert!(out.starts_with("éé\n"), "cut back to the last whole character: {out}");
+        assert!(out.contains("[saída cortada em 5 bytes]"));
+        assert_eq!(super::cap(s, 10), s, "within the limit nothing is cut");
+    }
+
     // ── todo_write (0.13.0): the task list ShvIA's Tasks tab shows ───────────────────────────
 
     #[test]

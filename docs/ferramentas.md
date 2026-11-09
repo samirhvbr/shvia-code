@@ -172,9 +172,10 @@ the destructive menu for these cards, so it reads *Sim, executar*.
   path glued to an option (`--from-file=…`) is not checked; `.ssh/` and `.aws/` are matched only after a `/`,
   and private keys by name only as `id_rsa*`. Automatic `cd` requires one explicit
   relative path. The path check still allows a symlink to point outside the project.
-- **Shell escapes require confirmation (0.15.11).** A backslash outside single quotes sends
+- **Shell escapes and expansions require confirmation.** A backslash outside single quotes sends
   the whole command to **confirm**, including inside double quotes and in `&&` chains.
-  ANSI-C quoted arguments (`$'...'`) also ask: their backslashes are decoded by the shell.
+  Bash dollar-prefixed quotes (`$'...'` and `$"..."`) and arithmetic expansion
+  (`$[…]`) also ask because the shell can change their arguments.
   The token checks do not interpret shell escapes, so `cat .e\nv` previously passed as
   a harmless name before `sh` removed the backslash and opened `.env`. Rather than approve
   an argument the shell will change, the scanner asks. This also asks for harmless escaped

@@ -1159,8 +1159,11 @@ fn dividir_por_and(cmd: &str) -> Option<Vec<String>> {
     while let Some(ch) = it.next() {
         // The token checks do not interpret shell escapes: `.e\nv` becomes `.env` only
         // when sh runs it. Ask rather than approve a different argument automatically.
-        // A backslash inside plain single quotes is literal; $'...' instead decodes escapes.
-        if aspa != Some('\'') && (ch == '\\' || (ch == '$' && it.peek() == Some(&'\''))) {
+        // Plain single quotes preserve backslashes. Bash's dollar-prefixed quotes can
+        // instead decode escapes or translate text before passing it as an argument.
+        if (aspa != Some('\'') && ch == '\\')
+            || (aspa.is_none() && ch == '$' && matches!(it.peek(), Some(&'\'' | &'"')))
+        {
             return None;
         }
         // Substituição de comando expande em tudo que não seja aspa simples.
@@ -1334,7 +1337,7 @@ fn expansao_de_variavel(seg: &str) -> Option<String> {
         // Special parameters also expand. An empty $@ could otherwise join pieces of an
         // option name, turning --p$@re=sh into --pre=sh after the option check.
         if aspa != Some('\'') && ch == '$' && it.peek().is_some_and(|p| {
-            p.is_ascii_alphanumeric() || "_{@*#?$!-".contains(*p)
+            p.is_ascii_alphanumeric() || "_{[@*#?$!-".contains(*p)
         }) {
             return Some(seg.to_string());
         }
@@ -1986,6 +1989,8 @@ mod tests {
             "rg --pr''e=./script needle README.md",
             "rg -e -- --pre=./script README.md",
             "rg --p$@re=./script needle README.md",
+            r#"rg $"--pre=./script" needle README.md"#,
+            r#"echo "$[1+2]""#,
             "rg --pr?=./script needle README.md",
             "rg --hostname-bin=./script --hyperlink-format=default needle README.md",
             "ag --pager=./script needle README.md",
@@ -2019,6 +2024,7 @@ mod tests {
         }
         for cmd in [
             "echo 'one\ntwo' && grep 'a\nb' README.md",
+            r#"grep "a$" README.md"#,
             "rg -n --glob='*.rs' needle src",
             "rg --files",
             "find . -name '*.rs'",

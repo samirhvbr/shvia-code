@@ -6,7 +6,8 @@ primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 ## 0.16.3 - Close automatic shell approval bypasses
 
 Unquoted line breaks and commands that select a subprocess or write through an option now require
-approval. Ordinary searches and reads, quoted multiline patterns, and approved project build and
+approval. The shell scanner also asks for Bash's dollar-prefixed quotes and arithmetic expansion.
+Ordinary searches and reads, quoted multiline patterns, and project build and
 test entry points remain available. Automatic Git reads suppress configured external diff drivers,
 text conversion, signature display and filesystem monitoring where applicable.
 

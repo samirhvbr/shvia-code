@@ -44,6 +44,7 @@ fn ripgrep_preprocessor_cannot_start_without_approval() {
     std::fs::set_permissions(&rg, std::fs::Permissions::from_mode(0o700)).unwrap();
     let path = format!("{}:/usr/bin:/bin", home.0.display());
     assert_shell_refused(&home, "rg --pre=sh needle README.md", &[("PATH", &path)]);
+    assert_shell_refused(&home, r#"rg $"--pre=sh" needle README.md"#, &[("PATH", &path)]);
 }
 
 

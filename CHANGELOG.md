@@ -3,6 +3,14 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.16.4 - Create the config's temporary key file as 0600 before writing the key
+
+`gravar_api_key` wrote the key into `config.toml.tmp` with `std::fs::write`, in the umask's
+mode (usually 0644), and only then set 0600: between the two calls the key was on disk
+readable by every local user. The file is now created with 0600 and the key written after,
+and a leftover temporary from a crash is removed first rather than reused with its old mode.
+Found by the documentation review of 05/11/2026.
+
 ## 0.16.4 - Cut long tool output on a character boundary
 
 `cap()` sliced the output by byte, so a bash or Git result over 32 KiB, or a destructive command

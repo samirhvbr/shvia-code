@@ -142,6 +142,20 @@ pub fn permissao_frouxa(_caminho: &std::path::Path) -> Option<u32> {
     None
 }
 
+/// A new file only its owner can read, created with that mode (`0600` on Unix) rather than
+/// tightened after the fact.
+fn criar_privado(caminho: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let _ = std::fs::remove_file(caminho);
+    let mut abrir = std::fs::OpenOptions::new();
+    abrir.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        abrir.mode(0o600);
+    }
+    abrir.open(caminho)
+}
+
 /// Grava `api_key` no `config.toml` com `0600`, preservando o resto do arquivo.
 ///
 /// Escreve num temporário no MESMO diretório e renomeia: `rename` dentro do mesmo sistema de
@@ -149,8 +163,10 @@ pub fn permissao_frouxa(_caminho: &std::path::Path) -> Option<u32> {
 /// arquivo pela metade — e um config truncado aqui significa perder url, elenco e verificação
 /// junto com a chave.
 ///
-/// A permissão é posta **antes** do rename, no temporário: criar em `0644` e ajustar depois
-/// abre uma janela em que a chave está no disco legível por todos.
+/// The temporary file is created already `0600`, before the key is written into it: writing
+/// first and tightening after (what this did until 0.16.4) left the key on disk readable by
+/// everyone between the two calls. A leftover temporary from a crash is removed first, since
+/// the mode only applies to a file being created.
 pub fn gravar_api_key(chave: &str) -> Result<PathBuf> {
     let caminho = Config::path().context("não consegui resolver o diretório de config do SO")?;
     let dir = caminho.parent().context("caminho de config sem diretório pai")?;
@@ -163,7 +179,11 @@ pub fn gravar_api_key(chave: &str) -> Result<PathBuf> {
     let texto = toml::to_string_pretty(&doc).context("serializando o config")?;
 
     let tmp = caminho.with_extension("toml.tmp");
-    std::fs::write(&tmp, &texto).with_context(|| format!("escrevendo {}", tmp.display()))?;
+    {
+        use std::io::Write;
+        let mut f = criar_privado(&tmp).with_context(|| format!("criando {}", tmp.display()))?;
+        f.write_all(texto.as_bytes()).with_context(|| format!("escrevendo {}", tmp.display()))?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -450,6 +470,21 @@ mod tests_permissao_e_chave {
                 if deve_reclamar { "" } else { "NÃO" }
             );
         }
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_key_file_is_private_before_anything_is_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = temp("privado.toml.tmp");
+        // A leftover from a crash, readable by everyone, must not lend its mode to the new file.
+        std::fs::write(&p, "old").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let f = super::criar_privado(&p).unwrap();
+        assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o600, "0600 from creation, still empty");
+        assert_eq!(f.metadata().unwrap().len(), 0, "the leftover is gone, not reused");
+        drop(f);
         let _ = std::fs::remove_file(&p);
     }
 

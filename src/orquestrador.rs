@@ -343,8 +343,8 @@ async fn fase_json<T>(
 
 fn entrada_revisor(plano: &Plano, root: &Path) -> String {
     let plano_json = serde_json::to_string_pretty(plano).unwrap_or_default();
-    let diff = git(root, &["diff"]);
-    let status = git(root, &["status", "--short"]);
+    let diff = git(root, "diff", &[]);
+    let status = git(root, "status", &["--short"]);
     format!(
         "PLANO APROVADO:\n{plano_json}\n\n\
          git status --short:\n{status}\n\n\
@@ -352,8 +352,8 @@ fn entrada_revisor(plano: &Plano, root: &Path) -> String {
     )
 }
 
-fn git(root: &Path, args: &[&str]) -> String {
-    match subprocess::command("git").args(args).current_dir(root).output() {
+fn git(root: &Path, cmd: &str, args: &[&str]) -> String {
+    match tools::git_leitura(cmd, args).current_dir(root).output() {
         Ok(o) => {
             let s = String::from_utf8_lossy(&o.stdout).into_owned();
             if s.trim().is_empty() { "(vazio)".into() } else { s }
@@ -395,15 +395,15 @@ fn tem_script_test(root: &Path, manifesto: &str) -> bool {
 /// allowlist é pulado com aviso, não executado em silêncio.
 fn falha_verificacao(root: &Path, cmds: &[String], ui: &mut Ui) -> Option<String> {
     for cmd in cmds {
-        if !tools::is_simple_allowlisted(cmd) {
+        let (_, Some(automatic)) = tools::shell_policy(cmd) else {
             ui.warn(&format!(
                 "verificação '{cmd}' fora da allowlist do bash — pulada (o gate não roda comando \
                  que precisaria da sua aprovação)."
             ));
             continue;
-        }
+        };
         ui.note(&format!("  $ {cmd}"));
-        let Ok(o) = subprocess::command("sh").arg("-c").arg(cmd).current_dir(root).output() else {
+        let Ok(o) = subprocess::command("sh").arg("-c").arg(automatic).current_dir(root).output() else {
             ui.warn(&format!("não consegui executar '{cmd}' — pulando."));
             continue;
         };
@@ -437,7 +437,7 @@ mod tests {
             "composer test",
         ] {
             assert!(
-                tools::is_simple_allowlisted(cmd),
+                tools::shell_policy(cmd).1.is_some(),
                 "'{cmd}' é default de verificação mas não passa na allowlist do bash"
             );
         }

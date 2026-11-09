@@ -505,17 +505,17 @@ fn bash(root: &Path, command: &str, why: &str, id: &str, fe: &mut dyn Frontend) 
     if command.trim().is_empty() {
         return "ERRO: comando vazio.".into();
     }
-    let policy = classify(command);
+    let (policy, automatic) = shell_policy(command);
     let preview = Preview::Command { command, why };
     if !fe.approve(policy, "bash", id, &preview) {
         return "RECUSADO: comando cancelado pelo usuário.".into();
     }
     // Comando destrutivo aprovado: foto antes — /rollback devolve os arquivos
     // RASTREADOS que ele apagar/alterar (o que estiver fora do git, não).
-    if is_destructive(command) {
+    if policy == Policy::Always {
         crate::checkpoint::snapshot(root, &format!("bash destrutivo: {}", cap(command, 60)));
     }
-    executar_bash(root, command, timeout_bash())
+    executar_bash(root, automatic.as_deref().unwrap_or(command), timeout_bash())
 }
 
 /// Roda o comando com teto de tempo, matando o GRUPO de processos se estourar.
@@ -750,14 +750,23 @@ fn matar_grupo(filho: &mut Child) {
 }
 
 /// Política do comando: destrutivo (Always) > allowlist simples (Auto) > Confirm.
-fn classify(cmd: &str) -> Policy {
+pub(crate) fn shell_policy(cmd: &str) -> (Policy, Option<String>) {
     if is_destructive(cmd) {
-        Policy::Always
-    } else if is_simple_allowlisted(cmd) {
-        Policy::Auto
-    } else {
-        Policy::Confirm
+        return (Policy::Always, None);
     }
+    if let Some(segs) = dividir_por_and(cmd) {
+        if segs.iter().all(|seg| segmento_permitido(seg)) {
+            let line = segs.iter().map(|seg| preparar_segmento_auto(seg.trim_matches([' ', '\t'])))
+                .collect::<Vec<_>>().join(" && ");
+            return (Policy::Auto, Some(line));
+        }
+    }
+    (Policy::Confirm, None)
+}
+
+#[cfg(test)]
+fn classify(cmd: &str) -> Policy {
+    shell_policy(cmd).0
 }
 
 /// Separa a linha em SEGMENTOS de comando por `;`, `|`, `||`, `&&` e nova linha,
@@ -991,18 +1000,15 @@ fn segmento_destrutivo(seg: &str) -> bool {
 /// `wget`, `ssh`, `docker` e afins ficam de fora de propósito.
 const ALLOWLIST: &[&str] = &[
     // Navegação e leitura de arquivo
-    "ls", "cat", "pwd", "echo", "head", "tail", "wc", "file", "cd", "stat",
-    "tree", "du", "df", "basename", "dirname", "realpath", "readlink",
+    "ls", "cat", "pwd", "echo", "head", "tail", "wc", "stat",
+    "du", "df", "basename", "dirname", "realpath", "readlink",
     // Busca e filtro (o grosso do que faltava)
-    "grep", "egrep", "fgrep", "rg", "ag", "cut", "sort", "uniq", "nl",
+    "grep", "egrep", "fgrep", "cut", "nl",
     "diff", "jq", "column", "tr", "which", "type", "command -v",
     // Git só-leitura
-    "git status", "git diff", "git log", "git show", "git branch",
-    "git rev-parse", "git ls-files", "git blame", "git describe",
-    "git remote -v", "git stash list", "git worktree list", "git config --get",
+    "git status", "git rev-parse", "git ls-files", "git describe", "git worktree list",
     // Build/teste (já rodavam)
-    "composer test", "npm test", "npm run", "cargo check", "cargo clippy",
-    "cargo test", "cargo build", "php -l", "phpunit", "pytest", "make test",
+    "composer test", "php -l", "phpunit", "pytest",
 ];
 
 /// `find` é leitura **até deixar de ser**: `-delete` apaga, `-exec`/`-ok` executam
@@ -1031,41 +1037,98 @@ const ALLOWLIST: &[&str] = &[
 /// **`npm run <script>`, `cargo build/test` e `make test` continuam em `Auto`, e isso é uma
 /// DECISÃO, não um esquecimento:** eles executam o que está declarado no projeto que o dev
 /// abriu (`package.json`, `Cargo.toml`, `Makefile`). Um prompt injetado não muda esses
-/// arquivos sem passar por `write_file`/`edit_file`, que têm cartão. Em uma frase: **o dev
-/// confia no `package.json` do próprio projeto.** Quem não quiser esse contrato tira as
-/// quatro entradas desta lista — é uma linha, e o efeito é uma confirmação por build.
-fn leitura_condicional(seg: &str) -> Option<bool> {
-    let c = seg.trim();
-    if c == "find" || c.starts_with("find ") {
-        let mau = c.contains("-delete") || c.contains("-exec") || c.contains("-ok")
-            || c.contains("-fprint") || c.contains("-fls");
-        return Some(!mau);
+/// arquivos sem passar por `write_file`/`edit_file`, que têm cartão. O contrato pressupõe
+/// que o dev confia nos scripts e nas configurações do projeto que abriu.
+fn leitura_condicional(c: &str, argv: &[String]) -> Option<bool> {
+    let (cmd, args) = argv.split_first()?;
+    match cmd.as_str() {
+        "cd" => Some(matches!(args, [path] if !path.is_empty() && !path.starts_with('-'))),
+        "file" => Some(!opcao_curta(args, "C") && !opcao_longa(args, &["--compile"], true)),
+        "find" => Some(!args.iter().any(|t| matches!(t.as_str(),
+            "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir" | "-fprint" | "-fprint0"
+                | "-fprintf" | "-fls"))),
+        "rg" => Some(!opcao_longa(args, &["--pre", "--hostname-bin"], false)),
+        "ag" => Some(!opcao_longa(args, &["--pager"], true)),
+        "tree" => Some(!opcao_curta(args, "oR")
+            && !opcao_longa(args, &["--hintro", "--houtro", "--fromfile", "--fromtabfile"], false)),
+        "sort" => Some(!opcao_curta(args, "o")
+            && !opcao_longa(args, &["--output", "--compress-program", "--files0-from"], true)),
+        "uniq" => {
+            let mut options = true;
+            let paths = args.iter().filter(|arg| {
+                if options && *arg == "--" {
+                    options = false;
+                    return false;
+                }
+                !options || *arg == "-" || !arg.starts_with('-')
+            }).count();
+            Some(paths <= 1)
+        }
+        "git" if c == "git remote -v" => Some(true),
+        "git" if c.starts_with("git config --get ") => Some(
+            (3..=4).contains(&args.len()) && args[2..].iter().all(|a| !a.starts_with('-')),
+        ),
+        "git" if prefixo_de_comando(c, "git branch") => Some(branch_so_leitura(&args[1..])),
+        "git" if ["git diff", "git log", "git show", "git blame", "git stash list"]
+            .iter().any(|prefix| prefixo_de_comando(c, prefix)) =>
+        {
+            Some(!opcao_longa(args, &["--output", "--ext-diff", "--textconv", "--show-signature"], false)
+                && !args.iter().any(|a| a.contains("%G")))
+        }
+        "make" => Some(c == "make test"),
+        "npm" if ["npm test", "npm run"].iter().any(|prefix| prefixo_de_comando(c, prefix)) => {
+            // Script arguments after -- go to the trusted project script. Before it npm also
+            // interprets its own config options, including --script-shell and its aliases.
+            Some(args.iter().skip(1).take_while(|a| *a != "--").all(|a| {
+                !a.starts_with('-') || matches!(a.as_str(), "-s" | "--silent" | "--if-present")
+            }))
+        }
+        "cargo" if ["cargo check", "cargo clippy", "cargo test", "cargo build"]
+            .iter().any(|prefix| prefixo_de_comando(c, prefix)) =>
+        {
+            Some(!opcao_longa(args, &["--config", "--manifest-path"], false))
+        }
+        _ => None,
     }
-    // `git branch` era prefixo, e prefixo não distingue LER de APAGAR: `git branch -D main`
-    // saía em `Auto`. Só as formas de leitura seguem automáticas (achado F-03).
-    if c == "git branch" || c.starts_with("git branch ") {
-        const LEITURA: &[&str] = &[
-            "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list",
-            "--show-current", "--merged", "--no-merged", "--contains", "--no-contains",
-            "--sort", "--format", "-i", "--color", "--no-color",
-        ];
-        return Some(tokens(c).into_iter().skip(2).all(|t| {
-            let chave = t.split('=').next().unwrap_or("").to_string();
-            // Nome de branch como argumento de `--merged`/`--contains` é leitura; o que
-            // decide é não haver flag de escrita. Só flags são conferidas.
-            !chave.starts_with('-') || LEITURA.contains(&chave.as_str())
-        }));
-    }
-    // `sort -o saida` e `uniq entrada saida` ESCREVEM — os dois estavam em `Auto` pelo
-    // nome, e o nome não diz que o segundo posicional é destino.
-    if c == "sort" || c.starts_with("sort ") {
-        return Some(!tokens(c).iter().skip(1).any(|t| t == "-o" || t.starts_with("--output")));
-    }
-    if c == "uniq" || c.starts_with("uniq ") {
-        let posicionais = tokens(c).into_iter().skip(1).filter(|t| !t.starts_with('-')).count();
-        return Some(posicionais <= 1);
-    }
-    None
+}
+
+fn prefixo_de_comando(line: &str, prefix: &str) -> bool {
+    line.strip_prefix(prefix).is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+}
+
+fn opcao_longa(args: &[String], nomes: &[&str], abreviada: bool) -> bool {
+    // Check every token, even after --. A preceding option could consume that token
+    // as its value instead of ending option parsing (e.g. rg -e -- --pre=sh).
+    args.iter().any(|a| {
+        let name = a.split_once('=').map_or(a.as_str(), |(name, _)| name);
+        name.starts_with("--") && name.len() > 2
+            && nomes.iter().any(|n| *n == name || (abreviada && n.starts_with(name)))
+    })
+}
+
+fn opcao_curta(args: &[String], proibidas: &str) -> bool {
+    args.iter().filter_map(|a| a.strip_prefix('-')).filter(|a| !a.starts_with('-'))
+        .any(|a| a.chars().any(|c| proibidas.contains(c)))
+}
+
+fn branch_so_leitura(args: &[String]) -> bool {
+    const LISTAGEM: &[&str] = &["--list", "--merged", "--no-merged", "--contains", "--no-contains"];
+    const LEITURA: &[&str] = &[
+        "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--show-current",
+        "--sort", "--format", "-i", "--color", "--no-color",
+    ];
+    // A bare positional creates a branch unless an explicit listing mode is present.
+    let mode = args.iter().any(|a| LISTAGEM.contains(&a.as_str()));
+    args.iter().all(|arg| {
+        let name = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
+        if matches!(arg.as_str(), "--format" | "--sort") {
+            false // A value in the next token could consume a listing flag.
+        } else if name.starts_with('-') {
+            LISTAGEM.contains(&name) || LEITURA.contains(&name)
+        } else {
+            mode
+        }
+    })
 }
 
 /// Varre o comando **com consciência de aspas** e devolve os segmentos separados
@@ -1096,8 +1159,11 @@ fn dividir_por_and(cmd: &str) -> Option<Vec<String>> {
     while let Some(ch) = it.next() {
         // The token checks do not interpret shell escapes: `.e\nv` becomes `.env` only
         // when sh runs it. Ask rather than approve a different argument automatically.
-        // A backslash inside plain single quotes is literal; $'...' instead decodes escapes.
-        if aspa != Some('\'') && (ch == '\\' || (ch == '$' && it.peek() == Some(&'\''))) {
+        // Plain single quotes preserve backslashes. Bash's dollar-prefixed quotes can
+        // instead decode escapes or translate text before passing it as an argument.
+        if (aspa != Some('\'') && ch == '\\')
+            || (aspa.is_none() && ch == '$' && matches!(it.peek(), Some(&'\'' | &'"')))
+        {
             return None;
         }
         // Substituição de comando expande em tudo que não seja aspa simples.
@@ -1114,7 +1180,9 @@ fn dividir_por_and(cmd: &str) -> Option<Vec<String>> {
             }
             None => match ch {
                 '\'' | '"' => { aspa = Some(ch); atual.push(ch); }
-                '>' | '<' | '|' | ';' => return None, // redireciona, encadeia ou pipa
+                // A comment could hide a quote from sh and make our scanner misread a
+                // later newline as quoted. Ask before running shell comments.
+                '>' | '<' | '|' | ';' | '\n' | '#' | '(' | ')' => return None,
                 '&' => {
                     if it.peek() == Some(&'&') {
                         it.next();
@@ -1157,7 +1225,7 @@ fn tokens(seg: &str) -> Vec<String> {
                     aspa = Some(ch);
                     tem = true;
                 }
-                c if c.is_whitespace() => {
+                ' ' | '\t' | '\n' => {
                     if tem || !atual.is_empty() {
                         out.push(std::mem::take(&mut atual));
                         tem = false;
@@ -1265,33 +1333,18 @@ fn argumento_de_caminho_recusado(seg: &str) -> Option<String> {
 fn expansao_de_variavel(seg: &str) -> Option<String> {
     let mut aspa: Option<char> = None;
     let mut it = seg.chars().peekable();
-
     while let Some(ch) = it.next() {
+        // Special parameters also expand. An empty $@ could otherwise join pieces of an
+        // option name, turning --p$@re=sh into --pre=sh after the option check.
+        if aspa != Some('\'') && ch == '$' && it.peek().is_some_and(|p| {
+            p.is_ascii_alphanumeric() || "_{[@*#?$!-".contains(*p)
+        }) {
+            return Some(seg.to_string());
+        }
         match aspa {
-            Some(a) => {
-                if ch == a {
-                    aspa = None;
-                }
-                // Dentro de aspa SIMPLES o `$` é literal; dentro da dupla, não.
-                if a == '"' && ch == '$' {
-                    if let Some(&p) = it.peek() {
-                        if p.is_ascii_alphanumeric() || p == '_' || p == '{' {
-                            return Some(seg.to_string());
-                        }
-                    }
-                }
-            }
-            None => match ch {
-                '\'' | '"' => aspa = Some(ch),
-                '$' => {
-                    if let Some(&p) = it.peek() {
-                        if p.is_ascii_alphanumeric() || p == '_' || p == '{' {
-                            return Some(seg.to_string());
-                        }
-                    }
-                }
-                _ => {}
-            },
+            Some(a) if ch == a => aspa = None,
+            None if matches!(ch, '\'' | '"') => aspa = Some(ch),
+            _ => {}
         }
     }
     None
@@ -1307,63 +1360,59 @@ fn expansao_de_variavel(seg: &str) -> Option<String> {
 /// files, `cd` earlier in the line, `nullglob`), and a partial copy would fail open; a card is the
 /// honest answer.
 ///
-/// Flags are skipped (`--include=*.rs` is never expanded in practice), and so is a pattern inside
-/// quotes (`grep -n "fn .*x" src`), which is what the agent writes. The price: `grep TODO src/*.rs`
+/// Attached values with a fixed long-option name and patterns inside quotes are allowed.
+/// Globs in an option name require confirmation even on commands that only list names. The price: `grep TODO src/*.rs`
 /// now asks; `grep -rn TODO src/` does not.
-fn glob_sem_aspas(seg: &str) -> Option<String> {
+fn glob_sem_aspas(seg: &str, permite_caminhos: bool) -> bool {
     let mut aspa: Option<char> = None;
     let mut palavra = String::new();
-    let mut glob = false;
-    let mut chave = false;
-    let mut primeira = true;
-    let fecha = |palavra: &mut String, glob: &mut bool, chave: &mut bool, primeira: &mut bool| {
-        let achou = !*primeira && (*glob || (*chave && palavra.contains(','))) && !palavra.starts_with('-');
-        let out = achou.then(|| palavra.clone());
-        if !palavra.is_empty() {
-            *primeira = false;
-        }
-        palavra.clear();
-        *glob = false;
-        *chave = false;
-        out
+    let mut glob = None;
+    let mut chave = None;
+    let fecha = |palavra: &str, glob: Option<usize>, chave: Option<usize>| {
+        let expansao = glob.into_iter().chain(chave.filter(|_| palavra.contains(','))).min();
+        expansao.is_some_and(|i| {
+            if palavra.starts_with('-') {
+                // A glob in an option name can turn --pr? into --pre. Only an attached
+                // value of a fixed long option (e.g. --include=*.rs) keeps the option fixed.
+                !palavra.starts_with("--") || !palavra.find('=').is_some_and(|eq| eq < i)
+            } else {
+                !permite_caminhos
+            }
+        })
     };
     for ch in seg.chars() {
         match aspa {
-            Some(a) => {
-                if ch == a {
-                    aspa = None;
-                }
-                palavra.push(ch);
-            }
+            Some(a) if ch == a => aspa = None,
+            Some(_) => palavra.push(ch),
             None => match ch {
-                '\'' | '"' => {
-                    aspa = Some(ch);
-                    palavra.push(ch);
-                }
-                c if c.is_whitespace() => {
-                    if let Some(w) = fecha(&mut palavra, &mut glob, &mut chave, &mut primeira) {
-                        return Some(w);
+                '\'' | '"' => aspa = Some(ch),
+                ' ' | '\t' => {
+                    if fecha(&palavra, glob, chave) {
+                        return true;
                     }
+                    palavra.clear();
+                    glob = None;
+                    chave = None;
                 }
                 '*' | '?' | '[' => {
-                    glob = true;
+                    glob.get_or_insert(palavra.len());
                     palavra.push(ch);
                 }
                 '{' => {
-                    chave = true;
+                    chave.get_or_insert(palavra.len());
                     palavra.push(ch);
                 }
                 _ => palavra.push(ch),
             },
         }
     }
-    fecha(&mut palavra, &mut glob, &mut chave, &mut primeira)
+    fecha(&palavra, glob, chave)
 }
 
 /// Commands that print names or metadata, never contents: a glob in their arguments shows the model
 /// nothing it could not list anyway, so they keep `Auto`.
 fn so_lista_nomes(seg: &str) -> bool {
-    const NOMES: &[&str] = &["ls", "wc", "file", "stat", "du", "tree", "basename", "dirname", "realpath", "readlink"];
+    const NOMES: &[&str] = &["ls", "wc", "stat", "du", "basename", "dirname", "realpath", "readlink"];
     let c = seg.trim();
     NOMES.iter().any(|n| c == *n || c.starts_with(&format!("{n} ")))
         || c.starts_with("git ls-files")
@@ -1371,7 +1420,7 @@ fn so_lista_nomes(seg: &str) -> bool {
 }
 
 fn segmento_permitido(seg: &str) -> bool {
-    let c = seg.trim();
+    let c = seg.trim_matches([' ', '\t']);
     if c.is_empty() {
         return false;
     }
@@ -1382,36 +1431,45 @@ fn segmento_permitido(seg: &str) -> bool {
     if expansao_de_variavel(c).is_some() {
         return false;
     }
-    if glob_sem_aspas(c).is_some() && !so_lista_nomes(c) {
+    if glob_sem_aspas(c, so_lista_nomes(c)) {
         return false;
     }
-    if let Some(ok) = leitura_condicional(c) {
+    if let Some(ok) = leitura_condicional(c, &tokens(c)) {
         return ok;
     }
-    ALLOWLIST.iter().any(|pfx| c == *pfx || c.starts_with(&format!("{pfx} ")))
+    ALLOWLIST.iter().any(|pfx| prefixo_de_comando(c, pfx))
 }
 
-/// Público no crate porque o gate determinístico do orquestrador só roda o que
-/// o `bash` já aprovaria sozinho (`Policy::Auto`) — o gate não pode virar porta
-/// dos fundos pra executar comando sem o dev ver.
-pub(crate) fn is_simple_allowlisted(cmd: &str) -> bool {
-    let c = cmd.trim();
+const GIT_LEITURA: &[&str] = &["--no-optional-locks", "-c", "core.fsmonitor=false"];
 
-    // Metacaracteres que redirecionam, substituem ou rodam em paralelo derrubam o
-    // comando inteiro: escondem efeito que a leitura do segmento não revela. A
-    // checagem é feita pelo scanner, que sabe o que está entre aspas.
-    //
-    // `&&` é a EXCEÇÃO, e é ela que devolve o silêncio ao gate. O agente compõe
-    // `cd <pasta> && grep ...` o tempo todo; antes disto, um encadeamento de dois
-    // comandos de leitura pedia aprovação porque a string tinha "&&" — e o dev
-    // aprovava `cd X && ls` vinte vezes por sessão. Cada segmento é conferido
-    // isoladamente e TODOS têm de passar; basta um fora da lista para virar
-    // `Confirm`. O `is_destructive` já rodou sobre a string INTEIRA antes daqui.
-    // (`||` cai no `|` dentro do scanner.)
-    match dividir_por_and(c) {
-        None => false, // `&` fora de aspas que não é `&&` = background
-        Some(segs) => segs.iter().all(|s| segmento_permitido(s)),
+fn opcoes_git_leitura(cmd: &str) -> &'static [&'static str] {
+    match cmd {
+        "diff" => &["--no-ext-diff", "--no-textconv"],
+        "log" | "show" | "stash list" => &["--no-ext-diff", "--no-textconv", "--no-show-signature"],
+        "blame" => &["--no-textconv"],
+        _ => &[],
     }
+}
+
+fn preparar_segmento_auto(seg: &str) -> String {
+    let Some(git) = seg.strip_prefix("git ") else {
+        return seg.to_owned();
+    };
+    let (cmd, args) = if let Some(rest) = git.strip_prefix("stash list") {
+        ("stash list", rest)
+    } else {
+        let end = git.find(' ').unwrap_or(git.len());
+        git.split_at(end)
+    };
+    let global = GIT_LEITURA.join(" ");
+    let local = opcoes_git_leitura(cmd).join(" ");
+    format!("git {global} {cmd} {local}{args}")
+}
+
+pub(crate) fn git_leitura(cmd: &str, args: &[&str]) -> std::process::Command {
+    let mut git = subprocess::command("git");
+    git.args(GIT_LEITURA).arg(cmd).args(opcoes_git_leitura(cmd)).args(args);
+    git
 }
 
 fn cap(s: &str, max: usize) -> String {
@@ -1425,7 +1483,15 @@ fn cap(s: &str, max: usize) -> String {
 // ── Git (C2) ────────────────────────────────────────────────────────────────
 
 fn run_git(root: &Path, args: &[&str]) -> String {
-    match subprocess::command("git").args(args).current_dir(root).output() {
+    let mut git = match args {
+        [cmd @ ("diff" | "status"), rest @ ..] => git_leitura(cmd, rest),
+        _ => {
+            let mut git = subprocess::command("git");
+            git.args(args);
+            git
+        }
+    };
+    match git.current_dir(root).output() {
         Ok(o) => {
             let out = String::from_utf8_lossy(&o.stdout);
             let err = String::from_utf8_lossy(&o.stderr);
@@ -1911,8 +1977,71 @@ mod tests {
             r#"cat "notes\ old.txt""#,
             r"cd notes\ old && cat README.md",
         ] {
-            assert!(!is_simple_allowlisted(cmd), "the policy does not normalize this syntax: {cmd}");
             assert_eq!(classify(cmd), Policy::Confirm, "should ask: {cmd}");
+        }
+    }
+
+    #[test]
+    fn automatic_shell_requires_unambiguous_segments_and_options() {
+        for cmd in [
+            "echo reading # '\nsh -c \"touch ran.txt\"\n# '",
+            "rg --pre ./script needle README.md",
+            "rg --pr''e=./script needle README.md",
+            "rg -e -- --pre=./script README.md",
+            "rg --p$@re=./script needle README.md",
+            r#"rg $"--pre=./script" needle README.md"#,
+            r#"echo "$[1+2]""#,
+            "rg --pr?=./script needle README.md",
+            "rg --hostname-bin=./script --hyperlink-format=default needle README.md",
+            "ag --pager=./script needle README.md",
+            "find . -ex''ec sh {} +",
+            "file -Cm magic",
+            "tree -o tree.txt",
+            "tree -Lo 1 tree.txt",
+            "tree *",
+            "sort -roout.txt list.txt",
+            "sort --out=out.txt list.txt",
+            "sort --compress-program=./script list.txt",
+            "uniq -- list.txt -out",
+            "git diff --output=result.txt",
+            "git log --output result.txt",
+            "git stash list --output=result.txt",
+            "git diff --ext-diff",
+            "git log --show-signature",
+            "git log --format='%G?'",
+            "git branch new-branch",
+            "git branch --format --list new-branch",
+            "git remote -v add new-remote test",
+            "git config --get --add name value",
+            "npm test --script-shell=./script",
+            "make test '--eval=$(shell touch ran.txt)'",
+            "cargo test --config 'build.rustc=\"./script\"'",
+            "cargo test --manifest-path=../other/Cargo.toml",
+            "cd && cat README.md",
+            "cd - && cat README.md",
+        ] {
+            assert_eq!(classify(cmd), Policy::Confirm, "should ask: {cmd:?}");
+        }
+        for cmd in [
+            "echo 'one\ntwo' && grep 'a\nb' README.md",
+            r#"grep "a$" README.md"#,
+            "rg -n --glob='*.rs' needle src",
+            "rg --files",
+            "find . -name '*.rs'",
+            "tree -L 1 src",
+            "sort -r list.txt",
+            "uniq -- list.txt",
+            "git diff --stat",
+            "git branch --list topic",
+            "git branch --merged main",
+            "git remote -v",
+            "git config --get core.ignorecase",
+            "npm test -- --watch",
+            "cargo test --locked",
+            "make test",
+            "cd src && cat main.rs",
+        ] {
+            assert_eq!(classify(cmd), Policy::Auto, "should run: {cmd:?}");
         }
     }
 
@@ -1925,7 +2054,6 @@ mod tests {
             "cat src/main.rs",
             "cd app && git status && cat README.md",
         ] {
-            assert!(is_simple_allowlisted(cmd), "the shell leaves this argument literal: {cmd}");
             assert_eq!(classify(cmd), Policy::Auto, "should not ask: {cmd}");
         }
     }

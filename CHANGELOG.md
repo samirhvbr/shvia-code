@@ -3,6 +3,18 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.16.5 - Keep gateway and memory requests at their configured endpoints
+
+Gateway and optional ai-memory clients no longer follow HTTP redirects, including redirects
+within the same origin. The gateway reports a non-retryable error with the HTTP status and asks
+for its final URL; hooks remain best-effort without forwarding their payload to a new recipient.
+A 307 response previously forwarded both the gateway key and the full conversation to another
+origin. Loopback process tests reproduce that behavior on the unchanged base and verify
+301/302/303/307/308, relative redirects and successful direct hooks with synthetic credentials.
+
+The lockfile also advances rustix from 1.1.4 to 1.1.6, the minimum patch for
+RUSTSEC-2026-0486, so the advisory CI gate can pass without an exception.
+
 ## 0.16.4 - Create the config's temporary key file as 0600 before writing the key
 
 `gravar_api_key` wrote the key into `config.toml.tmp` with `std::fs::write`, in the umask's

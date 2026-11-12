@@ -64,23 +64,33 @@ pub(crate) fn url_de_memoria(bruta: &str) -> Result<String, String> {
 pub fn init(cwd: &Path) {
     let _ = MEM.set(match std::env::var("AI_MEMORY_URL") {
         Ok(bruta) if !bruta.trim().is_empty() => match url_de_memoria(&bruta) {
-            Ok(url) => {
-                let sid = format!(
-                    "anna-{}-{}",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0),
-                );
-                Some(Mem {
-                    url,
-                    token: std::env::var("AI_MEMORY_TOKEN").ok().filter(|t| !t.trim().is_empty()),
-                    session_id: sid,
-                    cwd: cwd.display().to_string(),
-                    client: reqwest::Client::new(),
-                })
-            }
+            Ok(url) => match reqwest::Client::builder()
+                // A hook contains private work content, even when its bearer is stripped.
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+            {
+                Ok(client) => {
+                    let sid = format!(
+                        "anna-{}-{}",
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    );
+                    Some(Mem {
+                        url,
+                        token: std::env::var("AI_MEMORY_TOKEN").ok().filter(|t| !t.trim().is_empty()),
+                        session_id: sid,
+                        cwd: cwd.display().to_string(),
+                        client,
+                    })
+                }
+                Err(error) => {
+                    eprintln!("aviso: não foi possível iniciar o cliente HTTP de memória: {error}\n       Memória de longo prazo DESLIGADA.");
+                    None
+                }
+            },
             Err(motivo) => {
                 // DESLIGA em vez de recusar o boot: memória é opcional aqui — o `anna`
                 // funciona sem ela, e derrubar a ferramenta por causa de um hook mal

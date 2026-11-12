@@ -211,7 +211,10 @@ the host persists it.
 `AI_MEMORY_URL` enables best-effort `/hook` events with prompts, full tool arguments and
 up to 400 characters of each tool result, plus session boundaries. `AI_MEMORY_TOKEN`
 optionally supplies a bearer token. HTTPS is required except for loopback HTTP; an unsafe
-memory URL disables the integration with a warning. Requests have a 1.5-second timeout,
+memory URL disables the integration with a warning. Neither the gateway nor memory hooks
+follow HTTP redirects, even within the same origin: configure the final endpoint URL.
+Gateway redirects end the turn with an error; a hook redirect is ignored like other hook
+failures. Hook requests have a 1.5-second timeout,
 without retry or failure log. This exports working content to a separate service; it is
 not the local session store, and `anna` does not retrieve memories into its prompt. The
 gateway can do that on its side: the current ShvIA Web source prefixes a new turn with the

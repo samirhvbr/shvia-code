@@ -80,6 +80,9 @@ sessions, excessive requests/cost, unsafe dependencies and an impostor gateway.
    policy: selecting a cloud profile sends working content beyond the local machine.
    Optional memory hooks have a separate HTTPS/loopback guard and can export prompts,
    full tool arguments and result summaries to another configured service.
+   Since 0.16.5 both HTTP clients refuse redirects, including same-origin redirects,
+   so a response cannot forward credentials or conversation/hook content to another URL.
+   Configure the final gateway or memory endpoint directly.
 7. **Runtime limits (A6).** `max_voltas`/`SHVIA_MAX_VOLTAS` defaults to 100 model calls
    per turn, minimum 1. The interactive terminal can grant another batch; JSON ends the
    turn with a warning, after one closing request whose tool calls are never run (0.15.2).

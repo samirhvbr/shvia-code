@@ -22,9 +22,15 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// Client HTTP compartilhado do processo: reusa pool de conexões e sessão TLS
 /// entre voltas (antes: `Client::new()` a cada chamada = handshake TCP+TLS
 /// por turno contra o gateway).
-fn http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+fn http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            // A redirect must not choose a new recipient for the key or conversation.
+            reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build()
+        })
+        .as_ref()
+        .map_err(|error| anyhow!("não foi possível iniciar o cliente HTTP: {error}"))
 }
 
 /// Agregado de uma volta (o `on_event` já cuidou do render ao vivo).
@@ -117,7 +123,7 @@ pub async fn code_chat(
         profile_name: cfg.profile.clone(),
         effort: cfg.effort.clone(),
     };
-    let envio = http_client()
+    let envio = http_client()?
         .post(format!("{}/api/v1/code/chat", cfg.url.trim_end_matches('/')))
         .header("Accept", "text/event-stream")
         .header("X-API-Key", api_key)
@@ -143,6 +149,14 @@ pub async fn code_chat(
     };
 
     let status = resp.status();
+    if status.is_redirection() {
+        // Do not read or echo an untrusted redirect body/Location, and never retry it.
+        return Ok(TurnResult {
+            error: Some(format!("redirecionamento bloqueado (HTTP {status}): configure a URL final do gateway.")),
+            codigo: Some("redirecionamento_bloqueado".into()),
+            ..Default::default()
+        });
+    }
     if !status.is_success() {
         let retentavel = status_retentavel(status.as_u16());
         let espera = retry_after(resp.headers());

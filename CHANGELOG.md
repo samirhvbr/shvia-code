@@ -3,6 +3,18 @@
 Entradas no formato da mensagem de commit (`versão - comentário`), mais recente
 primeiro. É daqui que a skill COMMITTER tira a mensagem (CLAUDE.md §PS).
 
+## 0.16.6 - Advance quinn-udp to 0.5.16 so the install-time audit passes again
+
+`./install.sh` runs `cargo audit` and stops on any finding (f165). RUSTSEC-2026-0538 (receive
+loop can spin after a truncated datagram) flagged quinn-udp 0.5.15, so the installer aborted on
+Linux and macOS before building. Only the lockfile entry moves to 0.5.16, the minimum patch;
+`cargo update -p` would also have moved four crates from windows-sys 0.59 to 0.52, so the
+bump was made by hand and accepted by `cargo metadata --locked`.
+
+quinn-udp sits in the lockfile through reqwest's optional QUIC support and is not compiled into
+anna on any target (`cargo tree -i quinn-udp --target all` prints nothing), so released
+binaries were never exposed. The two yanked warnings (chacha20, clipboard-win) remain allowed.
+
 ## 0.16.5 - Keep gateway and memory requests at their configured endpoints
 
 Gateway and optional ai-memory clients no longer follow HTTP redirects, including redirects
